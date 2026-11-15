@@ -1,6 +1,6 @@
 output "e" {
-  description = "The RSA public exponent of the Key Vault Key. Use together with `n`, which carries the modulus. Empty for EC keys."
-  value       = azurerm_key_vault_key.this.e
+  description = "The RSA public exponent of the Key Vault Key. Use together with `n`, which carries the modulus. Empty for EC keys. `null` when `control_plane_enabled` is `true`, because Azure Resource Manager does not return the public key."
+  value       = var.control_plane_enabled ? null : azurerm_key_vault_key.this[0].e
 }
 
 output "id" {
@@ -16,32 +16,32 @@ example, requires this versioned form and is told to follow rotation by a separa
 setting. Use `versionless_id` only where the consuming API documents that it accepts a
 versionless URI.
 DESCRIPTION
-  value       = azurerm_key_vault_key.this.id
+  value       = var.control_plane_enabled ? azapi_resource.this[0].output.properties.keyUriWithVersion : azurerm_key_vault_key.this[0].id
 }
 
 output "n" {
-  description = "The RSA modulus of the Key Vault Key. Use together with `e`, which carries the public exponent. Empty for EC keys."
-  value       = azurerm_key_vault_key.this.n
+  description = "The RSA modulus of the Key Vault Key. Use together with `e`, which carries the public exponent. Empty for EC keys. `null` when `control_plane_enabled` is `true`, because Azure Resource Manager does not return the public key."
+  value       = var.control_plane_enabled ? null : azurerm_key_vault_key.this[0].n
 }
 
 output "name" {
   description = "The name of the Key Vault Key."
-  value       = azurerm_key_vault_key.this.name
+  value       = var.control_plane_enabled ? azapi_resource.this[0].name : azurerm_key_vault_key.this[0].name
 }
 
 output "public_key_openssh" {
-  description = "The OpenSSH encoded public key of the Key Vault Key. Empty for `P-256K` keys, which the provider does not derive a public key for."
-  value       = azurerm_key_vault_key.this.public_key_openssh
+  description = "The OpenSSH encoded public key of the Key Vault Key. Empty for `P-256K` keys, which the provider does not derive a public key for. `null` when `control_plane_enabled` is `true`, because Azure Resource Manager does not return the public key."
+  value       = var.control_plane_enabled ? null : azurerm_key_vault_key.this[0].public_key_openssh
 }
 
 output "public_key_pem" {
-  description = "The PEM encoded public key of the Key Vault Key. Empty for `P-256K` keys, which the provider does not derive a public key for."
-  value       = azurerm_key_vault_key.this.public_key_pem
+  description = "The PEM encoded public key of the Key Vault Key. Empty for `P-256K` keys, which the provider does not derive a public key for. `null` when `control_plane_enabled` is `true`, because Azure Resource Manager does not return the public key."
+  value       = var.control_plane_enabled ? null : azurerm_key_vault_key.this[0].public_key_pem
 }
 
 output "release_policy_configured" {
-  description = "Whether the key has a release policy configured."
-  value       = length(azurerm_key_vault_key.this.release_policy) > 0
+  description = "Whether the key has a release policy configured. Always `false` when `control_plane_enabled` is `true`, which does not support release policies."
+  value       = var.control_plane_enabled ? false : length(azurerm_key_vault_key.this[0].release_policy) > 0
 }
 
 output "resource_id" {
@@ -52,7 +52,7 @@ The versioned Azure Resource Manager (ARM) resource ID of the key, in the form
 This is an ARM resource ID, not a data plane URI. Use `id` when a service asks for a
 key vault key URI or identifier such as `https://<vault-name>.vault.azure.net/keys/...`.
 DESCRIPTION
-  value       = azurerm_key_vault_key.this.resource_id
+  value       = var.control_plane_enabled ? "${azapi_resource.this[0].id}/versions/${basename(azapi_resource.this[0].output.properties.keyUriWithVersion)}" : azurerm_key_vault_key.this[0].resource_id
 }
 
 output "resource_versionless_id" {
@@ -63,7 +63,7 @@ The versionless Azure Resource Manager (ARM) resource ID of the key, in the form
 This is an ARM resource ID, not a data plane URI. Because it does not pin a key version,
 services that support it will pick up new key versions automatically.
 DESCRIPTION
-  value       = azurerm_key_vault_key.this.resource_versionless_id
+  value       = local.resource_versionless_id
 }
 
 output "versionless_id" {
@@ -74,15 +74,15 @@ The versionless data plane URI of the key, in the form
 Because it does not pin a key version, services that support it will pick up new key
 versions automatically. Use `id` when a service requires a specific key version.
 DESCRIPTION
-  value       = azurerm_key_vault_key.this.versionless_id
+  value       = var.control_plane_enabled ? azapi_resource.this[0].output.properties.keyUri : azurerm_key_vault_key.this[0].versionless_id
 }
 
 output "x" {
-  description = "The EC X component of the Key Vault Key. Use together with `y`, which carries the Y component. Empty for RSA keys."
-  value       = azurerm_key_vault_key.this.x
+  description = "The EC X component of the Key Vault Key. Use together with `y`, which carries the Y component. Empty for RSA keys. `null` when `control_plane_enabled` is `true`, because Azure Resource Manager does not return the public key."
+  value       = var.control_plane_enabled ? null : azurerm_key_vault_key.this[0].x
 }
 
 output "y" {
-  description = "The EC Y component of the Key Vault Key. Use together with `x`, which carries the X component. Empty for RSA keys."
-  value       = azurerm_key_vault_key.this.y
+  description = "The EC Y component of the Key Vault Key. Use together with `x`, which carries the X component. Empty for RSA keys. `null` when `control_plane_enabled` is `true`, because Azure Resource Manager does not return the public key."
+  value       = var.control_plane_enabled ? null : azurerm_key_vault_key.this[0].y
 }

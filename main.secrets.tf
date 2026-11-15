@@ -5,12 +5,17 @@ module "secrets" {
   key_vault_resource_id = azapi_resource.this.id
   name                  = each.value.name
   content_type          = each.value.content_type
+  control_plane_enabled = each.value.control_plane_enabled
   enable_telemetry      = var.enable_telemetry
   expiration_date       = each.value.expiration_date
+  ignore_body_changes   = var.ignore_body_changes.keyvault_vaults_secrets
   location              = var.location
   not_before_date       = each.value.not_before_date
+  resource_types        = var.resource_types.keyvault_vaults_secrets
+  retry                 = var.retry
   role_assignments      = each.value.role_assignments
   tags                  = each.value.tags
+  timeouts              = var.timeouts
   value                 = try(var.secrets_value[each.key], null)
   value_wo              = try(var.secrets_value_wo[each.key], null)
   value_wo_version      = try(var.secrets_value_wo_version[each.key], null)

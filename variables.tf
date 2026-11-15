@@ -155,10 +155,16 @@ variable "enabled_for_template_deployment" {
 
 variable "ignore_body_changes" {
   type = object({
-    authorization_locks                               = optional(list(string), [])
-    authorization_role_assignments                    = optional(list(string), [])
-    insights_diagnostic_settings                      = optional(list(string), [])
-    keyvault_vaults                                   = optional(list(string), [])
+    authorization_locks            = optional(list(string), [])
+    authorization_role_assignments = optional(list(string), [])
+    insights_diagnostic_settings   = optional(list(string), [])
+    keyvault_vaults                = optional(list(string), [])
+    keyvault_vaults_keys = optional(object({
+      keyvault_vaults_keys = optional(list(string), [])
+    }), {})
+    keyvault_vaults_secrets = optional(object({
+      keyvault_vaults_secrets = optional(list(string), [])
+    }), {})
     network_private_endpoints                         = optional(list(string), [])
     network_private_endpoints_private_dns_zone_groups = optional(list(string), [])
   })
@@ -174,6 +180,10 @@ Supplying a non-empty value requires Terraform 1.11 or later, because `ignore_bo
 - `authorization_role_assignments` - Ignored body paths for the role assignments.
 - `insights_diagnostic_settings` - Ignored body paths for the diagnostic settings.
 - `keyvault_vaults` - Ignored body paths for the key vault.
+- `keyvault_vaults_keys` - Passed to the key submodule for the keys that set `control_plane_enabled`.
+  - `keyvault_vaults_keys` - Ignored body paths for those keys.
+- `keyvault_vaults_secrets` - Passed to the secret submodule for the secrets that set `control_plane_enabled`.
+  - `keyvault_vaults_secrets` - Ignored body paths for those secrets.
 - `network_private_endpoints` - Ignored body paths for the private endpoints.
 - `network_private_endpoints_private_dns_zone_groups` - Ignored body paths for the private DNS zone groups.
 DESCRIPTION
@@ -182,9 +192,10 @@ DESCRIPTION
 
 variable "keys" {
   type = map(object({
-    name     = string
-    key_type = string
-    key_opts = optional(list(string), ["sign", "verify"])
+    name                  = string
+    key_type              = string
+    key_opts              = optional(list(string), ["sign", "verify"])
+    control_plane_enabled = optional(bool, false)
 
     key_size        = optional(number, null)
     curve           = optional(string, null)
@@ -224,6 +235,7 @@ A map of keys to create on the Key Vault. The map key is deliberately arbitrary 
 - `name` - The name of the key.
 - `key_type` - The type of the key. Possible values are `EC`, `EC-HSM`, `RSA`, and `RSA-HSM`. The values are case-sensitive. The HSM-backed types (`EC-HSM` and `RSA-HSM`) require `var.sku_name` to be set to `premium`.
 - `key_opts` - A list of key options. Possible values are `decrypt`, `encrypt`, `sign`, `unwrapKey`, `verify`, and `wrapKey`.
+- `control_plane_enabled` - Whether to create the key through Azure Resource Manager with AzAPI instead of the Key Vault data plane. Defaults to `false`. The identity running Terraform then needs `Microsoft.KeyVault/vaults/keys/write` (for example Key Vault Contributor) instead of a Key Vault data plane role, and does not need network access to the vault. Azure Resource Manager only creates the first version of a key and never updates an existing one, so later changes to the key are shown in every plan but not applied. `release_policy` is not supported, and the public key outputs (`e`, `n`, `x`, `y`, `public_key_pem`, `public_key_openssh`) are `null`. Switching an existing key between the two paths would delete it; see the README.
 - `key_size` - The size of the key, e.g. `2048` or `4096`. Required for `RSA` and `RSA-HSM` keys.
 - `curve` - The curve of the key. Required for `EC` and `EC-HSM` keys.  Possible values are `P-256`, `P-256K`, `P-384`, and `P-521`. The API will default to `P-256` if nothing is specified.
 - `not_before_date` - The not before date of the key.
@@ -254,6 +266,10 @@ DESCRIPTION
   validation {
     error_message = "Keys with a release policy must have `key_type` set to `EC-HSM` or `RSA-HSM`."
     condition     = alltrue([for key in var.keys : key.release_policy == null || contains(["EC-HSM", "RSA-HSM"], key.key_type)])
+  }
+  validation {
+    error_message = "A release policy is not supported for a key with `control_plane_enabled` set to `true`."
+    condition     = alltrue([for key in var.keys : key.release_policy == null || !key.control_plane_enabled])
   }
 }
 
@@ -498,10 +514,16 @@ variable "purge_protection_enabled" {
 
 variable "resource_types" {
   type = object({
-    authorization_locks                               = optional(string, "Microsoft.Authorization/locks@2020-05-01")
-    authorization_role_assignments                    = optional(string, "Microsoft.Authorization/roleAssignments@2022-04-01")
-    insights_diagnostic_settings                      = optional(string, "Microsoft.Insights/diagnosticSettings@2021-05-01-preview")
-    keyvault_vaults                                   = optional(string, "Microsoft.KeyVault/vaults@2026-02-01")
+    authorization_locks            = optional(string, "Microsoft.Authorization/locks@2020-05-01")
+    authorization_role_assignments = optional(string, "Microsoft.Authorization/roleAssignments@2022-04-01")
+    insights_diagnostic_settings   = optional(string, "Microsoft.Insights/diagnosticSettings@2021-05-01-preview")
+    keyvault_vaults                = optional(string, "Microsoft.KeyVault/vaults@2026-02-01")
+    keyvault_vaults_keys = optional(object({
+      keyvault_vaults_keys = optional(string)
+    }), {})
+    keyvault_vaults_secrets = optional(object({
+      keyvault_vaults_secrets = optional(string)
+    }), {})
     network_private_endpoints                         = optional(string, "Microsoft.Network/privateEndpoints@2025-05-01")
     network_private_endpoints_private_dns_zone_groups = optional(string, "Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2025-05-01")
   })
@@ -513,6 +535,10 @@ AzAPI resource types and API versions used by the module, in `<provider>/<resour
 - `authorization_role_assignments` - The role assignments.
 - `insights_diagnostic_settings` - The diagnostic settings. The default is a preview version because the stable version does not support log category groups.
 - `keyvault_vaults` - The key vault.
+- `keyvault_vaults_keys` - Passed to the key submodule, which sets the default.
+  - `keyvault_vaults_keys` - The keys that set `control_plane_enabled`.
+- `keyvault_vaults_secrets` - Passed to the secret submodule, which sets the default.
+  - `keyvault_vaults_secrets` - The secrets that set `control_plane_enabled`.
 - `network_private_endpoints` - The private endpoints.
 - `network_private_endpoints_private_dns_zone_groups` - The private DNS zone groups of the private endpoints.
 DESCRIPTION
@@ -566,11 +592,12 @@ DESCRIPTION
 
 variable "secrets" {
   type = map(object({
-    name            = string
-    content_type    = optional(string, null)
-    tags            = optional(map(any), null)
-    not_before_date = optional(string, null)
-    expiration_date = optional(string, null)
+    name                  = string
+    content_type          = optional(string, null)
+    control_plane_enabled = optional(bool, false)
+    tags                  = optional(map(any), null)
+    not_before_date       = optional(string, null)
+    expiration_date       = optional(string, null)
 
     role_assignments = optional(map(object({
       role_definition_id_or_name             = string
@@ -589,6 +616,7 @@ A map of secrets to create on the Key Vault. The map key is deliberately arbitra
 
 - `name` - The name of the secret.
 - `content_type` - The content type of the secret.
+- `control_plane_enabled` - Whether to create the secret through Azure Resource Manager with AzAPI instead of the Key Vault data plane. Defaults to `false`. The identity running Terraform then needs `Microsoft.KeyVault/vaults/secrets/write` (for example Key Vault Contributor) instead of a Key Vault data plane role, and does not need network access to the vault. The value is sent in the write-only `sensitive_body`, so it stays out of the state (and out of the plan when it comes from `var.secrets_value_wo`), and Azure Resource Manager never returns it: a refresh reads only the metadata, and a value changed outside Terraform is not detected. The value is sent on creation, when `var.secrets_value_wo_version` changes for this key, and with any change to the other properties of the secret; a change of the value alone, in `var.secrets_value` or `var.secrets_value_wo`, is not sent until the version changes. Switching an existing secret between the two paths would delete it; see the README.
 - `tags` - A mapping of tags to assign to the secret.
 - `not_before_date` - The not before date of the secret.
 - `expiration_date` - The expiration date of the secret.
@@ -636,6 +664,8 @@ The map key is the supplied input to `var.secrets`.
 The map value is the version identifier for that secret value.
 
 Use the same key as `var.secrets_value_wo`; increment the version when the corresponding writable-only value changes to trigger a secret update.
+
+For a secret with `control_plane_enabled`, the version also controls when a value from `var.secrets_value` is sent, and a missing version counts as `0`.
 DESCRIPTION
 }
 

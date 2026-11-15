@@ -86,15 +86,23 @@ module "key_vault" {
     test_secret_wo = {
       name = "test-secret-wo"
     }
+    # Created through Azure Resource Manager rather than the Key Vault data plane: the value is
+    # sent once, and again only when its version in `secrets_value_wo_version` changes.
+    test_secret_control_plane = {
+      name                  = "test-secret-control-plane"
+      control_plane_enabled = true
+    }
   }
   secrets_value = {
     test_secret = "secret-value"
   }
   secrets_value_wo = {
-    test_secret_wo = "secret-value-wo"
+    test_secret_wo            = "secret-value-wo"
+    test_secret_control_plane = "secret-value-control-plane"
   }
   secrets_value_wo_version = {
-    test_secret_wo = 1
+    test_secret_wo            = 1
+    test_secret_control_plane = 1
   }
   wait_for_rbac_before_secret_operations = {
     create = "60s"

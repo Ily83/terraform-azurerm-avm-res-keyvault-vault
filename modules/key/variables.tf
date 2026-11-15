@@ -32,6 +32,23 @@ variable "curve" {
   description = "The curve of the EC key. Required if `type` is `EC` or `EC-HSM`. Possible values are `P-256`, `P-256K`, `P-384`, and `P-521`. This field will be required in a future release if key_type is EC or EC-HSM. The API will default to `P-256` if nothing is specified."
 }
 
+variable "control_plane_enabled" {
+  type        = bool
+  default     = false
+  description = <<DESCRIPTION
+Whether to create the key through Azure Resource Manager (`Microsoft.KeyVault/vaults/keys`, managed with AzAPI) instead of the Key Vault data plane (`azurerm_key_vault_key`). Defaults to `false`, which keeps the data plane behaviour of earlier versions.
+
+With `true`:
+
+- The identity running Terraform needs `Microsoft.KeyVault/vaults/keys/write` on the vault (for example Key Vault Contributor or Contributor) and no Key Vault data plane role. Requests go to Azure Resource Manager, so the vault firewall and private endpoints do not apply to them.
+- Azure Resource Manager only creates the first version of a key. A request for a key that already exists returns it without writing anything, so a later change to `opts`, `size`, `curve`, the dates, `rotation_policy` or `tags` is shown in every plan but is not applied. Change the key through the data plane, or create a key with a new name.
+- `release_policy` is not supported. The ARM schema for keys has a release policy but no `immutable` setting, so the data plane path stays the way to create a key for secure key release.
+- The `e`, `n`, `x`, `y`, `public_key_pem` and `public_key_openssh` outputs are `null`, because Azure Resource Manager does not return the public key.
+- Switching an existing key between the two paths deletes it and creates new key material. Move it in the state instead, as the root module's README describes.
+DESCRIPTION
+  nullable    = false
+}
+
 variable "enable_telemetry" {
   type        = bool
   default     = true
@@ -52,6 +69,19 @@ variable "expiration_date" {
     error_message = "Value must be a UTC datetime (Y-m-d'T'H:M:S'Z')."
     condition     = var.expiration_date == null ? true : can(regex("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$", var.expiration_date))
   }
+}
+
+variable "ignore_body_changes" {
+  type = object({
+    keyvault_vaults_keys = optional(list(string), [])
+  })
+  default     = {}
+  description = <<DESCRIPTION
+Paths in each AzAPI resource's `body` whose changes the AzAPI provider ignores. Paths use dot notation, for example `properties.rotationPolicy`. Configuration changes at an ignored path are **not** sent to Azure until the path is removed from the list. Changes take effect only after an apply, because the value is held in provider-private state.
+
+- `keyvault_vaults_keys` - Ignored body paths for the key when `control_plane_enabled` is `true`.
+DESCRIPTION
+  nullable    = false
 }
 
 variable "location" {
@@ -93,6 +123,44 @@ The release policy for a secure key release. Requires an `EC-HSM` or `RSA-HSM` k
 
 - `json` - The release policy as JSON text; use `jsonencode` to construct it.
 - `immutable` - Whether the release policy is immutable. Defaults to `false`.
+
+Not supported when `control_plane_enabled` is `true`.
+DESCRIPTION
+
+  validation {
+    condition     = var.release_policy == null || !var.control_plane_enabled
+    error_message = "A release policy is not supported for a key created through the control plane. Set `control_plane_enabled` to `false` to create the key through the data plane."
+  }
+}
+
+variable "resource_types" {
+  type = object({
+    keyvault_vaults_keys = optional(string, "Microsoft.KeyVault/vaults/keys@2026-02-01")
+  })
+  default     = {}
+  description = <<DESCRIPTION
+AzAPI resource types and API versions used by the module, in `<provider>/<resource>@<api-version>` form. Each key defaults to a tested value; supply only the keys you want to override.
+
+- `keyvault_vaults_keys` - The key, when `control_plane_enabled` is `true`.
+DESCRIPTION
+  nullable    = false
+}
+
+variable "retry" {
+  type = object({
+    error_message_regex  = optional(list(string))
+    interval_seconds     = optional(number)
+    max_interval_seconds = optional(number)
+  })
+  default     = null
+  description = <<DESCRIPTION
+Retry configuration applied to every `azapi` resource managed by the module. Defaults to `null` (no custom retry).
+
+- `error_message_regex`  - (Optional) A list of regex patterns matching error messages that trigger a retry.
+- `interval_seconds`     - (Optional) Initial interval between retries in seconds.
+- `max_interval_seconds` - (Optional) Maximum interval between retries in seconds.
+
+See <https://registry.terraform.io/providers/Azure/azapi/latest/docs/resources/resource#retry> for full semantics.
 DESCRIPTION
 }
 
@@ -154,4 +222,22 @@ variable "tags" {
   type        = map(string)
   default     = null
   description = "The tags to assign to the key."
+}
+
+variable "timeouts" {
+  type = object({
+    create = optional(string)
+    read   = optional(string)
+    update = optional(string)
+    delete = optional(string)
+  })
+  default     = null
+  description = <<DESCRIPTION
+Per-operation timeouts applied to every `azapi` resource managed by the module. Defaults to `null` (provider defaults). Each value is a Go duration string (e.g. `30m`, `1h`).
+
+- `create` - (Optional) Timeout for create operations.
+- `read`   - (Optional) Timeout for read operations.
+- `update` - (Optional) Timeout for update operations.
+- `delete` - (Optional) Timeout for delete operations.
+DESCRIPTION
 }

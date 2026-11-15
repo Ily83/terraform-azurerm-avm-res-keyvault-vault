@@ -35,6 +35,40 @@ module "keyvault_secret" {
 }
 ```
 
+## Creating the secret through Azure Resource Manager
+
+Set `control_plane_enabled = true` to create the secret through Azure Resource Manager
+(`Microsoft.KeyVault/vaults/secrets`, managed with AzAPI) instead of the Key Vault data plane. The
+identity running Terraform then needs `Microsoft.KeyVault/vaults/secrets/write` (for example Key
+Vault Contributor) instead of a data plane role, and does not need network access to the vault. The
+default is `false`, which keeps the data plane behaviour.
+
+```terraform
+module "keyvault_secret" {
+  source  = "Azure/avm-res-keyvault-vault/azurerm//modules/secret"
+  version = "0.#.#" # Replace with your desired version
+
+  key_vault_resource_id = azapi_resource.key_vault.id
+  location              = azapi_resource.key_vault.location
+  name                  = "my-secret"
+  control_plane_enabled = true
+  value_wo              = ephemeral.random_password.this.result
+  value_wo_version      = 1
+}
+```
+
+- The value is sent in the AzAPI `sensitive_body`, a write-only argument, so it is kept out of the
+  state, and also out of the plan when it comes from the ephemeral `value_wo`.
+  Azure Resource Manager never returns it, so a refresh reads only the metadata and Terraform cannot
+  detect a value changed outside Terraform.
+- The value is sent on creation, when `value_wo_version` changes, and with any change to the content
+  type, dates or tags. A change of `value` or `value_wo` alone is not sent until `value_wo_version`
+  changes. A `null` version counts as `0`.
+- Switching an existing secret between the two paths deletes it and creates it again, which fails
+  while the deleted secret is soft-deleted. Remove `azurerm_key_vault_secret.this[0]` from the state
+  and import `azapi_resource.this[0]` with the secret's ARM resource ID instead, as the root module's
+  README describes.
+
 <!-- markdownlint-disable MD033 -->
 ## Requirements
 
@@ -51,6 +85,7 @@ The following requirements are needed by this module:
 The following resources are used by this module:
 
 - [azapi_resource.telemetry](https://registry.terraform.io/providers/Azure/azapi/latest/docs/resources/resource) (resource)
+- [azapi_resource.this](https://registry.terraform.io/providers/Azure/azapi/latest/docs/resources/resource) (resource)
 - [azurerm_key_vault_secret.this](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/key_vault_secret) (resource)
 - [azurerm_role_assignment.this](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/role_assignment) (resource)
 - [terraform_data.telemetry](https://registry.terraform.io/providers/hashicorp/terraform/latest/docs/resources/data) (resource)
@@ -85,6 +120,21 @@ Type: `string`
 
 Default: `null`
 
+### <a name="input_control_plane_enabled"></a> [control\_plane\_enabled](#input\_control\_plane\_enabled)
+
+Description: Whether to create the secret through Azure Resource Manager (`Microsoft.KeyVault/vaults/secrets`, managed with AzAPI) instead of the Key Vault data plane (`azurerm_key_vault_secret`). Defaults to `false`, which keeps the data plane behaviour of earlier versions.
+
+With `true`:
+
+- The identity running Terraform needs `Microsoft.KeyVault/vaults/secrets/write` on the vault (for example Key Vault Contributor or Contributor) and no Key Vault data plane role. Requests go to Azure Resource Manager, so the vault firewall and private endpoints do not apply to them.
+- The value is sent through the write-only `sensitive_body`, so it is kept out of the state, and also out of the plan when it comes from the ephemeral `value_wo`. Azure Resource Manager never returns the value, so a refresh reads only the secret's metadata and Terraform cannot detect a value changed outside Terraform.
+- The value is sent when the secret is created, when `value_wo_version` changes, and when another property of the secret (content type, dates or tags) changes. A change of `value` or `value_wo` alone is not sent until `value_wo_version` changes; this applies to `value` as well as to `value_wo`.
+- Switching an existing secret between the two paths deletes it and creates it again, which fails while the deleted secret is soft-deleted. Move it in the state instead, as the root module's README describes.
+
+Type: `bool`
+
+Default: `false`
+
 ### <a name="input_enable_telemetry"></a> [enable\_telemetry](#input\_enable\_telemetry)
 
 Description: This variable controls whether or not telemetry is enabled for the module.  
@@ -103,6 +153,22 @@ Type: `string`
 
 Default: `null`
 
+### <a name="input_ignore_body_changes"></a> [ignore\_body\_changes](#input\_ignore\_body\_changes)
+
+Description: Paths in each AzAPI resource's `body` whose changes the AzAPI provider ignores. Paths use dot notation, for example `properties.contentType`. Configuration changes at an ignored path are **not** sent to Azure until the path is removed from the list. Changes take effect only after an apply, because the value is held in provider-private state.
+
+- `keyvault_vaults_secrets` - Ignored body paths for the secret when `control_plane_enabled` is `true`.
+
+Type:
+
+```hcl
+object({
+    keyvault_vaults_secrets = optional(list(string), [])
+  })
+```
+
+Default: `{}`
+
 ### <a name="input_location"></a> [location](#input\_location)
 
 Description: The Azure region for this module's resources or telemetry deployment.
@@ -116,6 +182,44 @@ Default: `null`
 Description: Secret not usable before as a UTC datetime (Y-m-d'T'H:M:S'Z').
 
 Type: `string`
+
+Default: `null`
+
+### <a name="input_resource_types"></a> [resource\_types](#input\_resource\_types)
+
+Description: AzAPI resource types and API versions used by the module, in `<provider>/<resource>@<api-version>` form. Each key defaults to a tested value; supply only the keys you want to override.
+
+- `keyvault_vaults_secrets` - The secret, when `control_plane_enabled` is `true`.
+
+Type:
+
+```hcl
+object({
+    keyvault_vaults_secrets = optional(string, "Microsoft.KeyVault/vaults/secrets@2026-02-01")
+  })
+```
+
+Default: `{}`
+
+### <a name="input_retry"></a> [retry](#input\_retry)
+
+Description: Retry configuration applied to every `azapi` resource managed by the module. Defaults to `null` (no custom retry).
+
+- `error_message_regex`  - (Optional) A list of regex patterns matching error messages that trigger a retry.
+- `interval_seconds`     - (Optional) Initial interval between retries in seconds.
+- `max_interval_seconds` - (Optional) Maximum interval between retries in seconds.
+
+See <https://registry.terraform.io/providers/Azure/azapi/latest/docs/resources/resource#retry> for full semantics.
+
+Type:
+
+```hcl
+object({
+    error_message_regex  = optional(list(string))
+    interval_seconds     = optional(number)
+    max_interval_seconds = optional(number)
+  })
+```
 
 Default: `null`
 
@@ -157,9 +261,31 @@ Type: `map(string)`
 
 Default: `null`
 
+### <a name="input_timeouts"></a> [timeouts](#input\_timeouts)
+
+Description: Per-operation timeouts applied to every `azapi` resource managed by the module. Defaults to `null` (provider defaults). Each value is a Go duration string (e.g. `30m`, `1h`).
+
+- `create` - (Optional) Timeout for create operations.
+- `read`   - (Optional) Timeout for read operations.
+- `update` - (Optional) Timeout for update operations.
+- `delete` - (Optional) Timeout for delete operations.
+
+Type:
+
+```hcl
+object({
+    create = optional(string)
+    read   = optional(string)
+    update = optional(string)
+    delete = optional(string)
+  })
+```
+
+Default: `null`
+
 ### <a name="input_value"></a> [value](#input\_value)
 
-Description: The value for the secret. Must be set if `value_wo` is not set.
+Description: The value for the secret. Must be set if `value_wo` is not set. With `control_plane_enabled`, a change of the value is sent only when `value_wo_version` changes.
 
 Type: `string`
 
@@ -175,7 +301,7 @@ Default: `null`
 
 ### <a name="input_value_wo_version"></a> [value\_wo\_version](#input\_value\_wo\_version)
 
-Description: The version of the secret writable only. Must be set if `value_wo` is set. Changing this updates the secret value.
+Description: The version of the secret writable only. Must be set if `value_wo` is set. Changing this updates the secret value. With `control_plane_enabled`, it also controls when `value` is sent, and `null` counts as `0`.
 
 Type: `number`
 

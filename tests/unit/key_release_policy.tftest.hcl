@@ -129,7 +129,7 @@ run "key_without_release_policy" {
   }
 
   assert {
-    condition     = length(azurerm_key_vault_key.this.release_policy) == 0
+    condition     = length(azurerm_key_vault_key.this[0].release_policy) == 0
     error_message = "Omitting a release policy must leave the provider block absent."
   }
 }
@@ -154,7 +154,7 @@ run "key_with_release_policy" {
   }
 
   assert {
-    condition     = azurerm_key_vault_key.this.release_policy[0].json == var.release_policy.json && azurerm_key_vault_key.this.release_policy[0].immutable == true
+    condition     = azurerm_key_vault_key.this[0].release_policy[0].json == var.release_policy.json && azurerm_key_vault_key.this[0].release_policy[0].immutable == true
     error_message = "The configured release policy must reach the key resource unchanged."
   }
 }
@@ -178,7 +178,7 @@ run "key_release_policy_defaults_to_mutable" {
   }
 
   assert {
-    condition     = azurerm_key_vault_key.this.release_policy[0].immutable == false
+    condition     = azurerm_key_vault_key.this[0].release_policy[0].immutable == false
     error_message = "Omitting immutable must preserve the provider's mutable default."
   }
 }

@@ -4,6 +4,10 @@
 
 This example shows how to deploy the module and create a key using Azure RBAC.
 
+The `signing_key_control_plane` key is created through Azure Resource Manager
+(`control_plane_enabled = true`) instead of the Key Vault data plane. Azure creates such a key once
+and does not apply later changes to it, and its public key outputs are `null`.
+
 It also shows how to consume the key from another module. Keys are exposed through the
 module's `keys` output, indexed by the **map key** used in `var.keys`
 (`cmk_for_storage_account` below), not by the key's `name`
@@ -125,6 +129,20 @@ module "key_vault" {
       key_type = "RSA-HSM"
       name     = "hsm-cmk-for-storage-account"
       key_size = 2048
+    }
+    # Created through Azure Resource Manager rather than the Key Vault data plane. Azure creates
+    # the key once and does not apply later changes to it.
+    signing_key_control_plane = {
+      control_plane_enabled = true
+      key_opts              = ["sign", "verify"]
+      key_type              = "RSA"
+      name                  = "signing-key-control-plane"
+      key_size              = 2048
+      rotation_policy = {
+        automatic = {
+          time_after_creation = "P180D"
+        }
+      }
     }
   }
   network_acls = {

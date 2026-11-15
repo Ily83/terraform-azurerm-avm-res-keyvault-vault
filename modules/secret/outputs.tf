@@ -6,12 +6,12 @@ The versioned data plane URI of the secret, in the form
 Because it pins a specific secret version, consumers will not pick up new versions
 automatically; use `versionless_id` instead if that is required.
 DESCRIPTION
-  value       = azurerm_key_vault_secret.this.id
+  value       = var.control_plane_enabled ? azapi_resource.this[0].output.properties.secretUriWithVersion : azurerm_key_vault_secret.this[0].id
 }
 
 output "name" {
   description = "The name of the Key Vault Secret."
-  value       = azurerm_key_vault_secret.this.name
+  value       = var.control_plane_enabled ? azapi_resource.this[0].name : azurerm_key_vault_secret.this[0].name
 }
 
 output "resource_id" {
@@ -22,7 +22,7 @@ The versioned Azure Resource Manager (ARM) resource ID of the secret, in the for
 This is an ARM resource ID, not a data plane URI. Use `id` when a service asks for a
 key vault secret URI such as `https://<vault-name>.vault.azure.net/secrets/...`.
 DESCRIPTION
-  value       = azurerm_key_vault_secret.this.resource_id
+  value       = var.control_plane_enabled ? "${azapi_resource.this[0].id}/versions/${basename(azapi_resource.this[0].output.properties.secretUriWithVersion)}" : azurerm_key_vault_secret.this[0].resource_id
 }
 
 output "resource_versionless_id" {
@@ -33,7 +33,7 @@ The versionless Azure Resource Manager (ARM) resource ID of the secret, in the f
 This is an ARM resource ID, not a data plane URI. Because it does not pin a secret
 version, consumers that support it will pick up new secret versions automatically.
 DESCRIPTION
-  value       = azurerm_key_vault_secret.this.resource_versionless_id
+  value       = local.resource_versionless_id
 }
 
 output "versionless_id" {
@@ -44,5 +44,5 @@ The versionless data plane URI of the secret, in the form
 Because it does not pin a secret version, consumers that support it will pick up new
 secret versions automatically. Use `id` when a specific version is required.
 DESCRIPTION
-  value       = azurerm_key_vault_secret.this.versionless_id
+  value       = var.control_plane_enabled ? azapi_resource.this[0].output.properties.secretUri : azurerm_key_vault_secret.this[0].versionless_id
 }

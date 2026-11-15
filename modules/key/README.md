@@ -40,12 +40,31 @@ module "keyvault_key" {
 }
 ```
 
+## Creating the key through Azure Resource Manager
+
+Set `control_plane_enabled = true` to create the key through Azure Resource Manager
+(`Microsoft.KeyVault/vaults/keys`, managed with AzAPI) instead of the Key Vault data plane. The
+identity running Terraform then needs `Microsoft.KeyVault/vaults/keys/write` (for example Key Vault
+Contributor) instead of a data plane role, and does not need network access to the vault. The
+default is `false`, which keeps the data plane behaviour.
+
+- Azure Resource Manager only creates the first version of a key. A request for a key that already
+  exists returns it without writing anything, so a later change to `opts`, `size`, `curve`, the
+  dates, `rotation_policy` or `tags` is shown in every plan but not applied. Change the key through
+  the data plane, or create a key with a new name.
+- `release_policy` is not supported.
+- The `e`, `n`, `x`, `y`, `public_key_pem` and `public_key_openssh` outputs are `null`, because Azure
+  Resource Manager does not return the public key.
+- Switching an existing key between the two paths deletes it and creates new key material. Remove
+  `azurerm_key_vault_key.this[0]` from the state and import `azapi_resource.this[0]` with the key's
+  ARM resource ID instead, as the root module's README describes.
+
 <!-- markdownlint-disable MD033 -->
 ## Requirements
 
 The following requirements are needed by this module:
 
-- <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) (>= 1.9, < 2.0)
+- <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) (>= 1.11, < 2.0)
 
 - <a name="requirement_azapi"></a> [azapi](#requirement\_azapi) (~> 2.12)
 
@@ -56,6 +75,7 @@ The following requirements are needed by this module:
 The following resources are used by this module:
 
 - [azapi_resource.telemetry](https://registry.terraform.io/providers/Azure/azapi/latest/docs/resources/resource) (resource)
+- [azapi_resource.this](https://registry.terraform.io/providers/Azure/azapi/latest/docs/resources/resource) (resource)
 - [azurerm_key_vault_key.this](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/key_vault_key) (resource)
 - [azurerm_role_assignment.this](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/role_assignment) (resource)
 - [terraform_data.telemetry](https://registry.terraform.io/providers/hashicorp/terraform/latest/docs/resources/data) (resource)
@@ -88,6 +108,22 @@ Type: `string`
 
 The following input variables are optional (have default values):
 
+### <a name="input_control_plane_enabled"></a> [control\_plane\_enabled](#input\_control\_plane\_enabled)
+
+Description: Whether to create the key through Azure Resource Manager (`Microsoft.KeyVault/vaults/keys`, managed with AzAPI) instead of the Key Vault data plane (`azurerm_key_vault_key`). Defaults to `false`, which keeps the data plane behaviour of earlier versions.
+
+With `true`:
+
+- The identity running Terraform needs `Microsoft.KeyVault/vaults/keys/write` on the vault (for example Key Vault Contributor or Contributor) and no Key Vault data plane role. Requests go to Azure Resource Manager, so the vault firewall and private endpoints do not apply to them.
+- Azure Resource Manager only creates the first version of a key. A request for a key that already exists returns it without writing anything, so a later change to `opts`, `size`, `curve`, the dates, `rotation_policy` or `tags` is shown in every plan but is not applied. Change the key through the data plane, or create a key with a new name.
+- `release_policy` is not supported. The ARM schema for keys has a release policy but no `immutable` setting, so the data plane path stays the way to create a key for secure key release.
+- The `e`, `n`, `x`, `y`, `public_key_pem` and `public_key_openssh` outputs are `null`, because Azure Resource Manager does not return the public key.
+- Switching an existing key between the two paths deletes it and creates new key material. Move it in the state instead, as the root module's README describes.
+
+Type: `bool`
+
+Default: `false`
+
 ### <a name="input_curve"></a> [curve](#input\_curve)
 
 Description: The curve of the EC key. Required if `type` is `EC` or `EC-HSM`. Possible values are `P-256`, `P-256K`, `P-384`, and `P-521`. This field will be required in a future release if key\_type is EC or EC-HSM. The API will default to `P-256` if nothing is specified.
@@ -113,6 +149,22 @@ Description: The expiration date of the key as a UTC datetime (Y-m-d'T'H:M:S'Z')
 Type: `string`
 
 Default: `null`
+
+### <a name="input_ignore_body_changes"></a> [ignore\_body\_changes](#input\_ignore\_body\_changes)
+
+Description: Paths in each AzAPI resource's `body` whose changes the AzAPI provider ignores. Paths use dot notation, for example `properties.rotationPolicy`. Configuration changes at an ignored path are **not** sent to Azure until the path is removed from the list. Changes take effect only after an apply, because the value is held in provider-private state.
+
+- `keyvault_vaults_keys` - Ignored body paths for the key when `control_plane_enabled` is `true`.
+
+Type:
+
+```hcl
+object({
+    keyvault_vaults_keys = optional(list(string), [])
+  })
+```
+
+Default: `{}`
 
 ### <a name="input_location"></a> [location](#input\_location)
 
@@ -145,12 +197,52 @@ Description: The release policy for a secure key release. Requires an `EC-HSM` o
 - `json` - The release policy as JSON text; use `jsonencode` to construct it.
 - `immutable` - Whether the release policy is immutable. Defaults to `false`.
 
+Not supported when `control_plane_enabled` is `true`.
+
 Type:
 
 ```hcl
 object({
     json      = string
     immutable = optional(bool, false)
+  })
+```
+
+Default: `null`
+
+### <a name="input_resource_types"></a> [resource\_types](#input\_resource\_types)
+
+Description: AzAPI resource types and API versions used by the module, in `<provider>/<resource>@<api-version>` form. Each key defaults to a tested value; supply only the keys you want to override.
+
+- `keyvault_vaults_keys` - The key, when `control_plane_enabled` is `true`.
+
+Type:
+
+```hcl
+object({
+    keyvault_vaults_keys = optional(string, "Microsoft.KeyVault/vaults/keys@2026-02-01")
+  })
+```
+
+Default: `{}`
+
+### <a name="input_retry"></a> [retry](#input\_retry)
+
+Description: Retry configuration applied to every `azapi` resource managed by the module. Defaults to `null` (no custom retry).
+
+- `error_message_regex`  - (Optional) A list of regex patterns matching error messages that trigger a retry.
+- `interval_seconds`     - (Optional) Initial interval between retries in seconds.
+- `max_interval_seconds` - (Optional) Maximum interval between retries in seconds.
+
+See <https://registry.terraform.io/providers/Azure/azapi/latest/docs/resources/resource#retry> for full semantics.
+
+Type:
+
+```hcl
+object({
+    error_message_regex  = optional(list(string))
+    interval_seconds     = optional(number)
+    max_interval_seconds = optional(number)
   })
 ```
 
@@ -227,13 +319,35 @@ Type: `map(string)`
 
 Default: `null`
 
+### <a name="input_timeouts"></a> [timeouts](#input\_timeouts)
+
+Description: Per-operation timeouts applied to every `azapi` resource managed by the module. Defaults to `null` (provider defaults). Each value is a Go duration string (e.g. `30m`, `1h`).
+
+- `create` - (Optional) Timeout for create operations.
+- `read`   - (Optional) Timeout for read operations.
+- `update` - (Optional) Timeout for update operations.
+- `delete` - (Optional) Timeout for delete operations.
+
+Type:
+
+```hcl
+object({
+    create = optional(string)
+    read   = optional(string)
+    update = optional(string)
+    delete = optional(string)
+  })
+```
+
+Default: `null`
+
 ## Outputs
 
 The following outputs are exported:
 
 ### <a name="output_e"></a> [e](#output\_e)
 
-Description: The RSA public exponent of the Key Vault Key. Use together with `n`, which carries the modulus. Empty for EC keys.
+Description: The RSA public exponent of the Key Vault Key. Use together with `n`, which carries the modulus. Empty for EC keys. `null` when `control_plane_enabled` is `true`, because Azure Resource Manager does not return the public key.
 
 ### <a name="output_id"></a> [id](#output\_id)
 
@@ -250,7 +364,7 @@ versionless URI.
 
 ### <a name="output_n"></a> [n](#output\_n)
 
-Description: The RSA modulus of the Key Vault Key. Use together with `e`, which carries the public exponent. Empty for EC keys.
+Description: The RSA modulus of the Key Vault Key. Use together with `e`, which carries the public exponent. Empty for EC keys. `null` when `control_plane_enabled` is `true`, because Azure Resource Manager does not return the public key.
 
 ### <a name="output_name"></a> [name](#output\_name)
 
@@ -258,15 +372,15 @@ Description: The name of the Key Vault Key.
 
 ### <a name="output_public_key_openssh"></a> [public\_key\_openssh](#output\_public\_key\_openssh)
 
-Description: The OpenSSH encoded public key of the Key Vault Key. Empty for `P-256K` keys, which the provider does not derive a public key for.
+Description: The OpenSSH encoded public key of the Key Vault Key. Empty for `P-256K` keys, which the provider does not derive a public key for. `null` when `control_plane_enabled` is `true`, because Azure Resource Manager does not return the public key.
 
 ### <a name="output_public_key_pem"></a> [public\_key\_pem](#output\_public\_key\_pem)
 
-Description: The PEM encoded public key of the Key Vault Key. Empty for `P-256K` keys, which the provider does not derive a public key for.
+Description: The PEM encoded public key of the Key Vault Key. Empty for `P-256K` keys, which the provider does not derive a public key for. `null` when `control_plane_enabled` is `true`, because Azure Resource Manager does not return the public key.
 
 ### <a name="output_release_policy_configured"></a> [release\_policy\_configured](#output\_release\_policy\_configured)
 
-Description: Whether the key has a release policy configured.
+Description: Whether the key has a release policy configured. Always `false` when `control_plane_enabled` is `true`, which does not support release policies.
 
 ### <a name="output_resource_id"></a> [resource\_id](#output\_resource\_id)
 
@@ -294,11 +408,11 @@ versions automatically. Use `id` when a service requires a specific key version.
 
 ### <a name="output_x"></a> [x](#output\_x)
 
-Description: The EC X component of the Key Vault Key. Use together with `y`, which carries the Y component. Empty for RSA keys.
+Description: The EC X component of the Key Vault Key. Use together with `y`, which carries the Y component. Empty for RSA keys. `null` when `control_plane_enabled` is `true`, because Azure Resource Manager does not return the public key.
 
 ### <a name="output_y"></a> [y](#output\_y)
 
-Description: The EC Y component of the Key Vault Key. Use together with `x`, which carries the X component. Empty for RSA keys.
+Description: The EC Y component of the Key Vault Key. Use together with `x`, which carries the X component. Empty for RSA keys. `null` when `control_plane_enabled` is `true`, because Azure Resource Manager does not return the public key.
 
 ## Modules
 

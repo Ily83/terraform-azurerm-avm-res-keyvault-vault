@@ -5,17 +5,22 @@ module "keys" {
   key_vault_resource_id = azapi_resource.this.id
   name                  = each.value.name
   type                  = each.value.key_type
+  control_plane_enabled = each.value.control_plane_enabled
   curve                 = each.value.curve
   enable_telemetry      = var.enable_telemetry
   expiration_date       = each.value.expiration_date
+  ignore_body_changes   = var.ignore_body_changes.keyvault_vaults_keys
   location              = var.location
   not_before_date       = each.value.not_before_date
   opts                  = each.value.key_opts
   release_policy        = each.value.release_policy
+  resource_types        = var.resource_types.keyvault_vaults_keys
+  retry                 = var.retry
   role_assignments      = each.value.role_assignments
   rotation_policy       = each.value.rotation_policy
   size                  = each.value.key_size
   tags                  = each.value.tags
+  timeouts              = var.timeouts
 
   # Keys are created through the private endpoints once their DNS records exist.
   depends_on = [
