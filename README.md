@@ -4,6 +4,20 @@
 
 Module to deploy key vaults, keys and secrets in Azure.
 
+## Recovering a soft-deleted key vault
+
+A deleted key vault stays in the soft-deleted state for its retention period and keeps its name, so
+creating a vault with that name fails. With purge protection, the vault cannot be purged earlier. To
+bring the vault back with its keys, secrets and certificates:
+
+1. Set `create_mode = "recover"` and apply. Azure restores the vault as it was and ignores the other
+   properties of that request.
+1. Set `create_mode` back to `null` and apply again. This brings the vault in line with the
+   configuration and recreates its role assignments, which a recovery does not restore.
+
+The `recover_soft_deleted_key_vaults` feature of the AzureRM provider has no effect on this module,
+which manages the key vault with AzAPI.
+
 ## Upgrading from a version that used the AzureRM provider for the key vault
 
 Versions up to 0.12.x managed the key vault itself with the AzureRM provider. This version manages
@@ -186,6 +200,18 @@ map(object({
 ```
 
 Default: `{}`
+
+### <a name="input_create_mode"></a> [create\_mode](#input\_create\_mode)
+
+Description: The create mode of the Key Vault. Possible values are `default` and `recover`. Leave it `null` (the default) to create the vault normally.
+
+Set it to `recover` to recover a soft-deleted Key Vault that has the same name, instead of failing because the name is still held by the deleted vault. Azure restores the vault as it was and ignores the other properties of that request, so once the vault is recovered, set this back to `null` and apply again to bring it in line with the configuration. Recovering a vault does not restore its role assignments.
+
+The `recover_soft_deleted_key_vaults` feature of the AzureRM provider does not apply to this module, which manages the vault with AzAPI.
+
+Type: `string`
+
+Default: `null`
 
 ### <a name="input_diagnostic_settings"></a> [diagnostic\_settings](#input\_diagnostic\_settings)
 

@@ -22,6 +22,9 @@ resource "azapi_resource" "this" {
           tenantId = var.tenant_id
         }
       ]
+      # Only sent when set. Azure does not return it, and `recover` restores a soft-deleted vault with
+      # this name instead of creating a new one.
+      createMode                   = var.create_mode
       enabledForDeployment         = var.enabled_for_deployment
       enabledForDiskEncryption     = var.enabled_for_disk_encryption
       enabledForTemplateDeployment = var.enabled_for_template_deployment

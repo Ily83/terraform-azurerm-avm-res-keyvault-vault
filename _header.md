@@ -2,6 +2,20 @@
 
 Module to deploy key vaults, keys and secrets in Azure.
 
+## Recovering a soft-deleted key vault
+
+A deleted key vault stays in the soft-deleted state for its retention period and keeps its name, so
+creating a vault with that name fails. With purge protection, the vault cannot be purged earlier. To
+bring the vault back with its keys, secrets and certificates:
+
+1. Set `create_mode = "recover"` and apply. Azure restores the vault as it was and ignores the other
+   properties of that request.
+1. Set `create_mode` back to `null` and apply again. This brings the vault in line with the
+   configuration and recreates its role assignments, which a recovery does not restore.
+
+The `recover_soft_deleted_key_vaults` feature of the AzureRM provider has no effect on this module,
+which manages the key vault with AzAPI.
+
 ## Upgrading from a version that used the AzureRM provider for the key vault
 
 Versions up to 0.12.x managed the key vault itself with the AzureRM provider. This version manages

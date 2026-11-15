@@ -62,6 +62,23 @@ variable "contacts" {
   description = "A map of contacts for the Key Vault. The map key is deliberately arbitrary to avoid issues where map keys maybe unknown at plan time."
 }
 
+variable "create_mode" {
+  type        = string
+  default     = null
+  description = <<DESCRIPTION
+The create mode of the Key Vault. Possible values are `default` and `recover`. Leave it `null` (the default) to create the vault normally.
+
+Set it to `recover` to recover a soft-deleted Key Vault that has the same name, instead of failing because the name is still held by the deleted vault. Azure restores the vault as it was and ignores the other properties of that request, so once the vault is recovered, set this back to `null` and apply again to bring it in line with the configuration. Recovering a vault does not restore its role assignments.
+
+The `recover_soft_deleted_key_vaults` feature of the AzureRM provider does not apply to this module, which manages the vault with AzAPI.
+DESCRIPTION
+
+  validation {
+    condition     = var.create_mode == null ? true : contains(["default", "recover"], var.create_mode)
+    error_message = "The create mode must be either `default` or `recover`."
+  }
+}
+
 variable "diagnostic_settings" {
   type = map(object({
     name                                     = optional(string, null)
