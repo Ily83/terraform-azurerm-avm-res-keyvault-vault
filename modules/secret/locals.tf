@@ -31,20 +31,30 @@ locals {
   attribute_unix_times = {
     for name, civil in local.attribute_dates_civil : name => (civil.era * 146097 + civil.year_of_era * 365 + floor(civil.year_of_era / 4) - floor(civil.year_of_era / 100) + civil.day_of_year - civil.unix_day_gap) * 86400 + civil.seconds
   }
-  control_plane_body = {
-    properties = {
-      attributes = {
-        enabled = true
-        exp     = lookup(local.attribute_unix_times, "exp", null)
-        nbf     = lookup(local.attribute_unix_times, "nbf", null)
-      }
-      contentType = var.content_type
-    }
-  }
-  # AzAPI sends the value only when this version changes. It includes a hash of the other secret
-  # properties, so a request that changes the secret always carries its value rather than relying on
-  # how Azure Resource Manager treats a secret PUT without one. A change of the value alone is sent
-  # only when `value_wo_version` changes, because the value itself is never compared.
-  control_plane_value_version = "${coalesce(var.value_wo_version, 0)}-${substr(sha256(jsonencode({ body = local.control_plane_body, tags = var.tags })), 0, 16)}"
-  resource_versionless_id     = var.control_plane_enabled ? azapi_resource.this[0].id : azurerm_key_vault_secret.this[0].resource_versionless_id
+  # The request body of the secret. Unset properties are left out: an action sends its body as it
+  # is, so a null would reach Azure as an explicit null.
+  control_plane_body = merge(
+    {
+      properties = merge(
+        { attributes = merge({ enabled = true }, local.attribute_unix_times) },
+        var.content_type == null ? {} : { contentType = var.content_type },
+      )
+    },
+    var.tags == null ? {} : { tags = var.tags },
+  )
+  # The outputs come from a read of the secret, so that they follow a version created outside
+  # Terraform. They fall back to the response of the last write when the secret can no longer be read.
+  control_plane_output = var.control_plane_enabled ? {
+    secret_uri              = try(data.azapi_resource.this[0].output.properties.secretUri, azapi_resource_action.this[0].output.properties.secretUri)
+    secret_uri_with_version = try(data.azapi_resource.this[0].output.properties.secretUriWithVersion, azapi_resource_action.this[0].output.properties.secretUriWithVersion)
+  } : null
+  # AzAPI sends the value only when this version changes, and Terraform only writes the secret again
+  # when the body, the resource type or this version changes. The version therefore includes a hash
+  # of the body and the type, so every request that writes the secret carries its value rather than
+  # relying on how Azure Resource Manager treats a secret PUT without one. Any other argument of the
+  # action that is made variable later has to be added to the hash for the same reason. A change of
+  # the value alone is sent only when `value_wo_version` changes, because the value itself is never
+  # compared.
+  control_plane_value_version = "${coalesce(var.value_wo_version, 0)}-${substr(sha256(jsonencode({ body = local.control_plane_body, type = var.resource_types.keyvault_vaults_secrets })), 0, 16)}"
+  resource_versionless_id     = var.control_plane_enabled ? azapi_resource_action.this[0].resource_id : azurerm_key_vault_secret.this[0].resource_versionless_id
 }

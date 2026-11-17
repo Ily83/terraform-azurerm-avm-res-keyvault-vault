@@ -9,7 +9,6 @@ module "keys" {
   curve                 = each.value.curve
   enable_telemetry      = var.enable_telemetry
   expiration_date       = each.value.expiration_date
-  ignore_body_changes   = var.ignore_body_changes.keyvault_vaults_keys
   location              = var.location
   not_before_date       = each.value.not_before_date
   opts                  = each.value.key_opts

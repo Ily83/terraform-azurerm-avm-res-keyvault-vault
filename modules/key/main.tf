@@ -44,22 +44,24 @@ moved {
 
 # The control plane path creates the key through Azure Resource Manager. The deploying identity needs
 # `Microsoft.KeyVault/vaults/keys/write` (for example Key Vault Contributor) instead of a data plane
-# role, and the vault firewall does not apply. Azure Resource Manager only creates the first version
-# of a key: a request for a key that already exists returns it without writing anything, so later
-# changes to the configuration are not applied to Azure.
-resource "azapi_resource" "this" {
+# role. Azure Resource Manager only creates the first version of a key: a request for a key that
+# already exists returns it without writing anything, so later changes to the configuration are not
+# applied to Azure.
+#
+# Azure Resource Manager has no DELETE for `Microsoft.KeyVault/vaults/keys` (405
+# `DeleteNotSupported`), so an `azapi_resource` for a key could never be destroyed or removed from a
+# configuration. The key is created with a PUT action instead. Destroying the action only forgets
+# the key: it stays in the vault until it is deleted through the data plane or the vault is deleted.
+resource "azapi_resource_action" "this" {
   count = var.control_plane_enabled ? 1 : 0
 
-  name                   = var.name
-  parent_id              = var.key_vault_resource_id
+  method                 = "PUT"
+  resource_id            = "${var.key_vault_resource_id}/keys/${var.name}"
   type                   = var.resource_types.keyvault_vaults_keys
   body                   = local.control_plane_body
-  ignore_body_changes    = length(var.ignore_body_changes.keyvault_vaults_keys) > 0 ? var.ignore_body_changes.keyvault_vaults_keys : null
-  ignore_casing          = true
-  ignore_null_property   = true
   response_export_values = ["properties.keyUri", "properties.keyUriWithVersion"]
   retry                  = var.retry
-  tags                   = var.tags
+  when                   = "apply"
 
   dynamic "timeouts" {
     for_each = var.timeouts == null ? [] : [var.timeouts]
@@ -71,6 +73,29 @@ resource "azapi_resource" "this" {
       update = timeouts.value.update
     }
   }
+}
+
+# An action is not refreshed, so the key's URIs are read here on every plan and follow a rotation of
+# the key. A key that was deleted outside Terraform is not an error: the outputs then keep the URIs
+# of the create request.
+data "azapi_resource" "this" {
+  count = var.control_plane_enabled ? 1 : 0
+
+  resource_id            = azapi_resource_action.this[0].resource_id
+  type                   = var.resource_types.keyvault_vaults_keys
+  ignore_not_found       = true
+  response_export_values = ["properties.keyUri", "properties.keyUriWithVersion"]
+  retry                  = var.retry
+
+  dynamic "timeouts" {
+    for_each = var.timeouts == null ? [] : [var.timeouts]
+
+    content {
+      read = timeouts.value.read
+    }
+  }
+
+  depends_on = [azapi_resource_action.this]
 }
 
 resource "azurerm_role_assignment" "this" {

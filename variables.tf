@@ -68,7 +68,9 @@ variable "create_mode" {
   description = <<DESCRIPTION
 The create mode of the Key Vault. Possible values are `default` and `recover`. Leave it `null` (the default) to create the vault normally.
 
-Set it to `recover` to recover a soft-deleted Key Vault that has the same name, instead of failing because the name is still held by the deleted vault. Azure restores the vault as it was and ignores the other properties of that request, so once the vault is recovered, set this back to `null` and apply again to bring it in line with the configuration. Recovering a vault does not restore its role assignments.
+Set it to `recover` to recover a soft-deleted Key Vault that has the same name. Without it, Azure recovers the deleted vault on a normal create request only when the request carries the same network ACLs as the deleted vault, and otherwise rejects the request with `409 ConflictError` because the name is still held by the deleted vault; `recover` asks for the recovery explicitly, whatever the configuration.
+
+Azure restores the vault as it was deleted and ignores the other properties of that request. While `create_mode` stays `recover`, Azure keeps ignoring them: a difference between the recovered vault and the configuration is shown in every plan and no apply removes it. Once the vault is recovered, set this back to `null` and apply again to bring the vault in line with the configuration. Recovering a vault does not restore its role assignments.
 
 The `recover_soft_deleted_key_vaults` feature of the AzureRM provider does not apply to this module, which manages the vault with AzAPI.
 DESCRIPTION
@@ -155,16 +157,10 @@ variable "enabled_for_template_deployment" {
 
 variable "ignore_body_changes" {
   type = object({
-    authorization_locks            = optional(list(string), [])
-    authorization_role_assignments = optional(list(string), [])
-    insights_diagnostic_settings   = optional(list(string), [])
-    keyvault_vaults                = optional(list(string), [])
-    keyvault_vaults_keys = optional(object({
-      keyvault_vaults_keys = optional(list(string), [])
-    }), {})
-    keyvault_vaults_secrets = optional(object({
-      keyvault_vaults_secrets = optional(list(string), [])
-    }), {})
+    authorization_locks                               = optional(list(string), [])
+    authorization_role_assignments                    = optional(list(string), [])
+    insights_diagnostic_settings                      = optional(list(string), [])
+    keyvault_vaults                                   = optional(list(string), [])
     network_private_endpoints                         = optional(list(string), [])
     network_private_endpoints_private_dns_zone_groups = optional(list(string), [])
   })
@@ -180,10 +176,6 @@ Supplying a non-empty value requires Terraform 1.11 or later, because `ignore_bo
 - `authorization_role_assignments` - Ignored body paths for the role assignments.
 - `insights_diagnostic_settings` - Ignored body paths for the diagnostic settings.
 - `keyvault_vaults` - Ignored body paths for the key vault.
-- `keyvault_vaults_keys` - Passed to the key submodule for the keys that set `control_plane_enabled`.
-  - `keyvault_vaults_keys` - Ignored body paths for those keys.
-- `keyvault_vaults_secrets` - Passed to the secret submodule for the secrets that set `control_plane_enabled`.
-  - `keyvault_vaults_secrets` - Ignored body paths for those secrets.
 - `network_private_endpoints` - Ignored body paths for the private endpoints.
 - `network_private_endpoints_private_dns_zone_groups` - Ignored body paths for the private DNS zone groups.
 DESCRIPTION
@@ -235,7 +227,7 @@ A map of keys to create on the Key Vault. The map key is deliberately arbitrary 
 - `name` - The name of the key.
 - `key_type` - The type of the key. Possible values are `EC`, `EC-HSM`, `RSA`, and `RSA-HSM`. The values are case-sensitive. The HSM-backed types (`EC-HSM` and `RSA-HSM`) require `var.sku_name` to be set to `premium`.
 - `key_opts` - A list of key options. Possible values are `decrypt`, `encrypt`, `sign`, `unwrapKey`, `verify`, and `wrapKey`.
-- `control_plane_enabled` - Whether to create the key through Azure Resource Manager with AzAPI instead of the Key Vault data plane. Defaults to `false`. The identity running Terraform then needs `Microsoft.KeyVault/vaults/keys/write` (for example Key Vault Contributor) instead of a Key Vault data plane role, and does not need network access to the vault. Azure Resource Manager only creates the first version of a key and never updates an existing one, so later changes to the key are shown in every plan but not applied. `release_policy` is not supported, and the public key outputs (`e`, `n`, `x`, `y`, `public_key_pem`, `public_key_openssh`) are `null`. Switching an existing key between the two paths would delete it; see the README.
+- `control_plane_enabled` - Whether to create the key through Azure Resource Manager, with an AzAPI PUT action, instead of the Key Vault data plane. Defaults to `false`. The identity running Terraform then needs `Microsoft.KeyVault/vaults/keys/write` and `read` (for example Key Vault Contributor) instead of a Key Vault data plane role. Azure Resource Manager reaches the vault as a trusted Microsoft service, so a vault firewall that denies by default must set `var.network_acls.bypass` to `AzureServices`; with the default `None` the key fails with `ForbiddenByFirewall`. Azure Resource Manager only creates the first version of a key and never updates an existing one, so later changes to the key are sent but change nothing, and it cannot delete a key: removing the entry or destroying leaves the key in the vault until it is deleted through the data plane. Terraform does not detect changes made to the key outside Terraform. `release_policy` is not supported, and the public key outputs (`e`, `n`, `x`, `y`, `public_key_pem`, `public_key_openssh`) are `null`. Do not switch an existing key without the state steps in the README.
 - `key_size` - The size of the key, e.g. `2048` or `4096`. Required for `RSA` and `RSA-HSM` keys.
 - `curve` - The curve of the key. Required for `EC` and `EC-HSM` keys.  Possible values are `P-256`, `P-256K`, `P-384`, and `P-521`. The API will default to `P-256` if nothing is specified.
 - `not_before_date` - The not before date of the key.
@@ -616,7 +608,7 @@ A map of secrets to create on the Key Vault. The map key is deliberately arbitra
 
 - `name` - The name of the secret.
 - `content_type` - The content type of the secret.
-- `control_plane_enabled` - Whether to create the secret through Azure Resource Manager with AzAPI instead of the Key Vault data plane. Defaults to `false`. The identity running Terraform then needs `Microsoft.KeyVault/vaults/secrets/write` (for example Key Vault Contributor) instead of a Key Vault data plane role, and does not need network access to the vault. The value is sent in the write-only `sensitive_body`, so it stays out of the state (and out of the plan when it comes from `var.secrets_value_wo`), and Azure Resource Manager never returns it: a refresh reads only the metadata, and a value changed outside Terraform is not detected. The value is sent on creation, when `var.secrets_value_wo_version` changes for this key, and with any change to the other properties of the secret; a change of the value alone, in `var.secrets_value` or `var.secrets_value_wo`, is not sent until the version changes. Switching an existing secret between the two paths would delete it; see the README.
+- `control_plane_enabled` - Whether to create the secret through Azure Resource Manager, with an AzAPI PUT action, instead of the Key Vault data plane. Defaults to `false`. The identity running Terraform then needs `Microsoft.KeyVault/vaults/secrets/write` and `read` (for example Key Vault Contributor) instead of a Key Vault data plane role, and does not need network access to the vault. The value is sent in the write-only `sensitive_body`, so it stays out of the state (and out of the plan when it comes from `var.secrets_value_wo`), and Azure Resource Manager never returns it. The value is sent on creation, when `var.secrets_value_wo_version` changes for this key, and with any change to the other properties of the secret; a change of the value alone, in `var.secrets_value` or `var.secrets_value_wo`, is not sent until the version changes. Terraform does not detect changes made to the secret outside Terraform. Azure Resource Manager cannot delete a secret: removing the entry or destroying leaves the secret in the vault until it is deleted through the data plane. Do not switch an existing secret without the state steps in the README.
 - `tags` - A mapping of tags to assign to the secret.
 - `not_before_date` - The not before date of the secret.
 - `expiration_date` - The expiration date of the secret.

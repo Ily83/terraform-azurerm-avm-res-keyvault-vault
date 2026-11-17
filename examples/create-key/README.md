@@ -5,8 +5,11 @@
 This example shows how to deploy the module and create a key using Azure RBAC.
 
 The `signing_key_control_plane` key is created through Azure Resource Manager
-(`control_plane_enabled = true`) instead of the Key Vault data plane. Azure creates such a key once
-and does not apply later changes to it, and its public key outputs are `null`.
+(`control_plane_enabled = true`) instead of the Key Vault data plane. Azure creates such a key once,
+does not apply later changes to it and cannot delete it: destroying the example only removes the key
+from the state, and it goes with the key vault. Its public key outputs are `null`. Azure Resource
+Manager reaches the vault as a trusted Microsoft service for this, which is why the example sets
+`network_acls.bypass = "AzureServices"` with the firewall denying by default.
 
 It also shows how to consume the key from another module. Keys are exposed through the
 module's `keys` output, indexed by the **map key** used in `var.keys`
@@ -131,7 +134,9 @@ module "key_vault" {
       key_size = 2048
     }
     # Created through Azure Resource Manager rather than the Key Vault data plane. Azure creates
-    # the key once and does not apply later changes to it.
+    # the key once, does not apply later changes to it and cannot delete it: destroying this
+    # example only forgets the key, which goes when the key vault is deleted. This path needs
+    # `network_acls.bypass = "AzureServices"` below, because the firewall denies by default.
     signing_key_control_plane = {
       control_plane_enabled = true
       key_opts              = ["sign", "verify"]

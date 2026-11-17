@@ -98,7 +98,9 @@ module "key_vault" {
       key_size = 2048
     }
     # Created through Azure Resource Manager rather than the Key Vault data plane. Azure creates
-    # the key once and does not apply later changes to it.
+    # the key once, does not apply later changes to it and cannot delete it: destroying this
+    # example only forgets the key, which goes when the key vault is deleted. This path needs
+    # `network_acls.bypass = "AzureServices"` below, because the firewall denies by default.
     signing_key_control_plane = {
       control_plane_enabled = true
       key_opts              = ["sign", "verify"]

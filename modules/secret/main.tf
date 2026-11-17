@@ -21,17 +21,21 @@ moved {
 
 # The control plane path writes the secret through Azure Resource Manager. The deploying identity
 # needs `Microsoft.KeyVault/vaults/secrets/write` (for example Key Vault Contributor) instead of a
-# data plane role, and the vault firewall does not apply. Azure never returns the value, so it is
-# sent through `sensitive_body`, which is write-only and kept out of the plan and the state.
-resource "azapi_resource" "this" {
+# data plane role. Azure never returns the value, so it is sent through `sensitive_body`, which is
+# write-only and kept out of the state.
+#
+# Azure Resource Manager has no DELETE for `Microsoft.KeyVault/vaults/secrets` (405
+# `DeleteNotSupported`), so an `azapi_resource` for a secret could never be destroyed or removed from
+# a configuration. The secret is written with a PUT action instead. Destroying the action only
+# forgets the secret: it stays in the vault until it is deleted through the data plane or the vault
+# is deleted.
+resource "azapi_resource_action" "this" {
   count = var.control_plane_enabled ? 1 : 0
 
-  name                   = var.name
-  parent_id              = var.key_vault_resource_id
+  method                 = "PUT"
+  resource_id            = "${var.key_vault_resource_id}/secrets/${var.name}"
   type                   = var.resource_types.keyvault_vaults_secrets
   body                   = local.control_plane_body
-  ignore_body_changes    = length(var.ignore_body_changes.keyvault_vaults_secrets) > 0 ? var.ignore_body_changes.keyvault_vaults_secrets : null
-  ignore_null_property   = true
   response_export_values = ["properties.secretUri", "properties.secretUriWithVersion"]
   retry                  = var.retry
   sensitive_body = {
@@ -42,7 +46,7 @@ resource "azapi_resource" "this" {
   sensitive_body_version = {
     "properties.value" = local.control_plane_value_version
   }
-  tags = var.tags
+  when = "apply"
 
   dynamic "timeouts" {
     for_each = var.timeouts == null ? [] : [var.timeouts]
@@ -61,6 +65,29 @@ resource "azapi_resource" "this" {
       error_message = "A secret created through the control plane needs a value: set `value` or `value_wo`."
     }
   }
+}
+
+# An action is not refreshed, so the secret's URIs are read here on every plan. Azure Resource
+# Manager returns the secret's metadata only, never its value. A secret that was deleted outside
+# Terraform is not an error: the outputs then keep the URIs of the last write.
+data "azapi_resource" "this" {
+  count = var.control_plane_enabled ? 1 : 0
+
+  resource_id            = azapi_resource_action.this[0].resource_id
+  type                   = var.resource_types.keyvault_vaults_secrets
+  ignore_not_found       = true
+  response_export_values = ["properties.secretUri", "properties.secretUriWithVersion"]
+  retry                  = var.retry
+
+  dynamic "timeouts" {
+    for_each = var.timeouts == null ? [] : [var.timeouts]
+
+    content {
+      read = timeouts.value.read
+    }
+  }
+
+  depends_on = [azapi_resource_action.this]
 }
 
 resource "azurerm_role_assignment" "this" {

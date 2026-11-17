@@ -87,7 +87,9 @@ module "key_vault" {
       name = "test-secret-wo"
     }
     # Created through Azure Resource Manager rather than the Key Vault data plane: the value is
-    # sent once, and again only when its version in `secrets_value_wo_version` changes.
+    # sent once, and again only when its version in `secrets_value_wo_version` changes. Azure
+    # Resource Manager cannot delete a secret, so destroying this example only forgets it; the
+    # secret goes when the key vault is deleted.
     test_secret_control_plane = {
       name                  = "test-secret-control-plane"
       control_plane_enabled = true

@@ -31,42 +31,50 @@ locals {
   attribute_unix_times = {
     for name, civil in local.attribute_dates_civil : name => (civil.era * 146097 + civil.year_of_era * 365 + floor(civil.year_of_era / 4) - floor(civil.year_of_era / 100) + civil.day_of_year - civil.unix_day_gap) * 86400 + civil.seconds
   }
-  control_plane_body = {
-    properties = {
-      attributes = {
-        enabled = true
-        exp     = lookup(local.attribute_unix_times, "exp", null)
-        nbf     = lookup(local.attribute_unix_times, "nbf", null)
-      }
-      curveName = var.curve
-      keyOps    = var.opts
-      keySize   = var.size
-      kty       = var.type
-      # The automatic rotation becomes a `rotate` action and `notify_before_expiry` a `notify` action,
-      # as with the AzureRM provider. The values are the lower-case ones of the ARM schema; Azure
-      # returns them capitalised, which `ignore_casing` on the resource absorbs.
-      rotationPolicy = var.rotation_policy == null ? null : {
-        attributes = var.rotation_policy.expire_after == null ? null : {
-          expiryTime = var.rotation_policy.expire_after
-        }
-        lifetimeActions = concat(
-          var.rotation_policy.automatic == null ? [] : [{
-            action = { type = "rotate" }
-            trigger = {
+  # The request body of the key. Unset properties are left out: an action sends its body as it is,
+  # so a null would reach Azure as an explicit null.
+  control_plane_body = merge(
+    {
+      properties = merge(
+        {
+          attributes = merge({ enabled = true }, local.attribute_unix_times)
+          keyOps     = var.opts
+          kty        = var.type
+        },
+        var.curve == null ? {} : { curveName = var.curve },
+        var.size == null ? {} : { keySize = var.size },
+        var.rotation_policy == null ? {} : { rotationPolicy = local.control_plane_rotation_policy },
+      )
+    },
+    var.tags == null ? {} : { tags = var.tags },
+  )
+  # The outputs come from a read of the key, so that they follow a rotation of the key. They fall
+  # back to the response of the create request when the key can no longer be read.
+  control_plane_output = var.control_plane_enabled ? {
+    key_uri              = try(data.azapi_resource.this[0].output.properties.keyUri, azapi_resource_action.this[0].output.properties.keyUri)
+    key_uri_with_version = try(data.azapi_resource.this[0].output.properties.keyUriWithVersion, azapi_resource_action.this[0].output.properties.keyUriWithVersion)
+  } : null
+  # The automatic rotation becomes a `rotate` action and `notify_before_expiry` a `notify` action,
+  # as with the AzureRM provider.
+  control_plane_rotation_policy = var.rotation_policy == null ? null : merge(
+    var.rotation_policy.expire_after == null ? {} : { attributes = { expiryTime = var.rotation_policy.expire_after } },
+    {
+      lifetimeActions = concat(
+        var.rotation_policy.automatic == null ? [] : [{
+          action = { type = "rotate" }
+          trigger = {
+            for name, value in {
               timeAfterCreate  = var.rotation_policy.automatic.time_after_creation
               timeBeforeExpiry = var.rotation_policy.automatic.time_before_expiry
-            }
-          }],
-          var.rotation_policy.notify_before_expiry == null ? [] : [{
-            action = { type = "notify" }
-            trigger = {
-              timeAfterCreate  = null
-              timeBeforeExpiry = var.rotation_policy.notify_before_expiry
-            }
-          }],
-        )
-      }
-    }
-  }
-  resource_versionless_id = var.control_plane_enabled ? azapi_resource.this[0].id : azurerm_key_vault_key.this[0].resource_versionless_id
+            } : name => value if value != null
+          }
+        }],
+        var.rotation_policy.notify_before_expiry == null ? [] : [{
+          action  = { type = "notify" }
+          trigger = { timeBeforeExpiry = var.rotation_policy.notify_before_expiry }
+        }],
+      )
+    },
+  )
+  resource_versionless_id = var.control_plane_enabled ? azapi_resource_action.this[0].resource_id : azurerm_key_vault_key.this[0].resource_versionless_id
 }

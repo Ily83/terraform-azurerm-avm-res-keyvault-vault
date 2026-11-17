@@ -43,21 +43,34 @@ module "keyvault_key" {
 ## Creating the key through Azure Resource Manager
 
 Set `control_plane_enabled = true` to create the key through Azure Resource Manager
-(`Microsoft.KeyVault/vaults/keys`, managed with AzAPI) instead of the Key Vault data plane. The
-identity running Terraform then needs `Microsoft.KeyVault/vaults/keys/write` (for example Key Vault
-Contributor) instead of a data plane role, and does not need network access to the vault. The
-default is `false`, which keeps the data plane behaviour.
+(`Microsoft.KeyVault/vaults/keys`) instead of the Key Vault data plane. The identity running
+Terraform then needs `Microsoft.KeyVault/vaults/keys/write` and `read` (for example Key Vault
+Contributor) instead of a data plane role. The default is `false`, which keeps the data plane
+behaviour.
 
+Azure Resource Manager has no delete operation for keys, so the module creates the key with an AzAPI
+PUT action (`azapi_resource_action`) rather than managing it as a resource:
+
+- Removing the module, renaming the key, setting `control_plane_enabled` back to `false` or running
+  `terraform destroy` only removes the key from the state. It stays in the vault until it is deleted
+  through the data plane (for example `az keyvault key delete`) or the vault is deleted.
+- Azure Resource Manager reaches the vault as a trusted Microsoft service to create and read a key.
+  When the vault firewall denies by default, it must let trusted services through
+  (`network_acls.bypass = "AzureServices"` in the root module). With `bypass = "None"`, the root
+  module's default, the request fails with `400 ForbiddenByFirewall`.
 - Azure Resource Manager only creates the first version of a key. A request for a key that already
   exists returns it without writing anything, so a later change to `opts`, `size`, `curve`, the
-  dates, `rotation_policy` or `tags` is shown in every plan but not applied. Change the key through
-  the data plane, or create a key with a new name.
+  dates, `rotation_policy` or `tags` is sent but changes nothing in Azure, and Terraform does not
+  report the difference. Change the key through the data plane, or create a key with a new name.
+- Terraform does not track the key after creating it. A change made outside Terraform is neither
+  detected nor reverted. Only the key's URIs are read on every plan, so the outputs follow a rotation
+  of the key.
 - `release_policy` is not supported.
 - The `e`, `n`, `x`, `y`, `public_key_pem` and `public_key_openssh` outputs are `null`, because Azure
   Resource Manager does not return the public key.
-- Switching an existing key between the two paths deletes it and creates new key material. Remove
-  `azurerm_key_vault_key.this[0]` from the state and import `azapi_resource.this[0]` with the key's
-  ARM resource ID instead, as the root module's README describes.
+- Switching an existing data plane key to the control plane would first delete it through the data
+  plane. Remove `azurerm_key_vault_key.this[0]` from the state before applying instead, as the root
+  module's README describes.
 
 <!-- markdownlint-disable MD033 -->
 ## Requirements
@@ -75,11 +88,12 @@ The following requirements are needed by this module:
 The following resources are used by this module:
 
 - [azapi_resource.telemetry](https://registry.terraform.io/providers/Azure/azapi/latest/docs/resources/resource) (resource)
-- [azapi_resource.this](https://registry.terraform.io/providers/Azure/azapi/latest/docs/resources/resource) (resource)
+- [azapi_resource_action.this](https://registry.terraform.io/providers/Azure/azapi/latest/docs/resources/resource_action) (resource)
 - [azurerm_key_vault_key.this](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/key_vault_key) (resource)
 - [azurerm_role_assignment.this](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/role_assignment) (resource)
 - [terraform_data.telemetry](https://registry.terraform.io/providers/hashicorp/terraform/latest/docs/resources/data) (resource)
 - [azapi_client_config.telemetry](https://registry.terraform.io/providers/Azure/azapi/latest/docs/data-sources/client_config) (data source)
+- [azapi_resource.this](https://registry.terraform.io/providers/Azure/azapi/latest/docs/data-sources/resource) (data source)
 
 <!-- markdownlint-disable MD013 -->
 ## Required Inputs
@@ -110,15 +124,18 @@ The following input variables are optional (have default values):
 
 ### <a name="input_control_plane_enabled"></a> [control\_plane\_enabled](#input\_control\_plane\_enabled)
 
-Description: Whether to create the key through Azure Resource Manager (`Microsoft.KeyVault/vaults/keys`, managed with AzAPI) instead of the Key Vault data plane (`azurerm_key_vault_key`). Defaults to `false`, which keeps the data plane behaviour of earlier versions.
+Description: Whether to create the key through Azure Resource Manager (`Microsoft.KeyVault/vaults/keys`, created with an AzAPI PUT action) instead of the Key Vault data plane (`azurerm_key_vault_key`). Defaults to `false`, which keeps the data plane behaviour of earlier versions.
 
 With `true`:
 
-- The identity running Terraform needs `Microsoft.KeyVault/vaults/keys/write` on the vault (for example Key Vault Contributor or Contributor) and no Key Vault data plane role. Requests go to Azure Resource Manager, so the vault firewall and private endpoints do not apply to them.
-- Azure Resource Manager only creates the first version of a key. A request for a key that already exists returns it without writing anything, so a later change to `opts`, `size`, `curve`, the dates, `rotation_policy` or `tags` is shown in every plan but is not applied. Change the key through the data plane, or create a key with a new name.
+- The identity running Terraform needs `Microsoft.KeyVault/vaults/keys/write` and `Microsoft.KeyVault/vaults/keys/read` on the vault (for example Key Vault Contributor or Contributor) and no Key Vault data plane role.
+- Azure Resource Manager reaches the vault as a trusted Microsoft service to create and read a key. When the vault firewall denies by default, it must let trusted services through (`bypass = "AzureServices"` in the root module's `network_acls`). With `bypass = "None"`, the root module's default, the request fails with `ForbiddenByFirewall`.
+- Azure Resource Manager only creates the first version of a key. A request for a key that already exists returns it without writing anything, so a later change to `opts`, `size`, `curve`, the dates, `rotation_policy` or `tags` is sent but changes nothing in Azure, and Terraform does not report the difference. Change the key through the data plane, or create a key with a new name.
+- Terraform does not track the key after creating it. A change made outside Terraform is neither detected nor reverted. Only the key's URIs are read on every plan, so the outputs follow a rotation of the key.
+- Azure Resource Manager cannot delete a key. Removing the key from the configuration, renaming it, setting this back to `false` or running `terraform destroy` only removes it from the state: the key stays in the vault until it is deleted through the data plane (for example `az keyvault key delete`) or the vault is deleted.
 - `release_policy` is not supported. The ARM schema for keys has a release policy but no `immutable` setting, so the data plane path stays the way to create a key for secure key release.
 - The `e`, `n`, `x`, `y`, `public_key_pem` and `public_key_openssh` outputs are `null`, because Azure Resource Manager does not return the public key.
-- Switching an existing key between the two paths deletes it and creates new key material. Move it in the state instead, as the root module's README describes.
+- Switching an existing data plane key to `true` would first delete it through the data plane. Remove it from the state instead, as the root module's README describes.
 
 Type: `bool`
 
@@ -149,22 +166,6 @@ Description: The expiration date of the key as a UTC datetime (Y-m-d'T'H:M:S'Z')
 Type: `string`
 
 Default: `null`
-
-### <a name="input_ignore_body_changes"></a> [ignore\_body\_changes](#input\_ignore\_body\_changes)
-
-Description: Paths in each AzAPI resource's `body` whose changes the AzAPI provider ignores. Paths use dot notation, for example `properties.rotationPolicy`. Configuration changes at an ignored path are **not** sent to Azure until the path is removed from the list. Changes take effect only after an apply, because the value is held in provider-private state.
-
-- `keyvault_vaults_keys` - Ignored body paths for the key when `control_plane_enabled` is `true`.
-
-Type:
-
-```hcl
-object({
-    keyvault_vaults_keys = optional(list(string), [])
-  })
-```
-
-Default: `{}`
 
 ### <a name="input_location"></a> [location](#input\_location)
 

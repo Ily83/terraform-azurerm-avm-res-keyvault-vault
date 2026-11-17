@@ -36,10 +36,11 @@ module "keyvault_secret" {
 ## Creating the secret through Azure Resource Manager
 
 Set `control_plane_enabled = true` to create the secret through Azure Resource Manager
-(`Microsoft.KeyVault/vaults/secrets`, managed with AzAPI) instead of the Key Vault data plane. The
-identity running Terraform then needs `Microsoft.KeyVault/vaults/secrets/write` (for example Key
-Vault Contributor) instead of a data plane role, and does not need network access to the vault. The
-default is `false`, which keeps the data plane behaviour.
+(`Microsoft.KeyVault/vaults/secrets`) instead of the Key Vault data plane. The identity running
+Terraform then needs `Microsoft.KeyVault/vaults/secrets/write` and `read` (for example Key Vault
+Contributor) instead of a data plane role, and does not need network access to the vault: Azure
+Resource Manager writes the secret even when the vault firewall denies by default. The default is
+`false`, which keeps the data plane behaviour.
 
 ```terraform
 module "keyvault_secret" {
@@ -55,14 +56,21 @@ module "keyvault_secret" {
 }
 ```
 
+Azure Resource Manager has no delete operation for secrets, so the module writes the secret with an
+AzAPI PUT action (`azapi_resource_action`) rather than managing it as a resource:
+
+- Removing the module, renaming the secret, setting `control_plane_enabled` back to `false` or
+  running `terraform destroy` only removes the secret from the state. It stays in the vault until it
+  is deleted through the data plane (for example `az keyvault secret delete`) or the vault is deleted.
+- Terraform does not track the secret after writing it. A change made outside Terraform to its value,
+  content type, dates or tags is neither detected nor reverted. Only the secret's URIs are read on
+  every plan, so the outputs follow a version created outside Terraform.
 - The value is sent in the AzAPI `sensitive_body`, a write-only argument, so it is kept out of the
-  state, and also out of the plan when it comes from the ephemeral `value_wo`.
-  Azure Resource Manager never returns it, so a refresh reads only the metadata and Terraform cannot
-  detect a value changed outside Terraform.
+  state, and also out of the plan when it comes from the ephemeral `value_wo`. Azure Resource Manager
+  never returns it.
 - The value is sent on creation, when `value_wo_version` changes, and with any change to the content
   type, dates or tags. A change of `value` or `value_wo` alone is not sent until `value_wo_version`
   changes. A `null` version counts as `0`.
-- Switching an existing secret between the two paths deletes it and creates it again, which fails
-  while the deleted secret is soft-deleted. Remove `azurerm_key_vault_secret.this[0]` from the state
-  and import `azapi_resource.this[0]` with the secret's ARM resource ID instead, as the root module's
-  README describes.
+- Switching an existing data plane secret to the control plane would first delete it through the
+  data plane. Remove `azurerm_key_vault_secret.this[0]` from the state before applying instead, as
+  the root module's README describes.

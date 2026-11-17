@@ -38,10 +38,11 @@ module "keyvault_secret" {
 ## Creating the secret through Azure Resource Manager
 
 Set `control_plane_enabled = true` to create the secret through Azure Resource Manager
-(`Microsoft.KeyVault/vaults/secrets`, managed with AzAPI) instead of the Key Vault data plane. The
-identity running Terraform then needs `Microsoft.KeyVault/vaults/secrets/write` (for example Key
-Vault Contributor) instead of a data plane role, and does not need network access to the vault. The
-default is `false`, which keeps the data plane behaviour.
+(`Microsoft.KeyVault/vaults/secrets`) instead of the Key Vault data plane. The identity running
+Terraform then needs `Microsoft.KeyVault/vaults/secrets/write` and `read` (for example Key Vault
+Contributor) instead of a data plane role, and does not need network access to the vault: Azure
+Resource Manager writes the secret even when the vault firewall denies by default. The default is
+`false`, which keeps the data plane behaviour.
 
 ```terraform
 module "keyvault_secret" {
@@ -57,17 +58,24 @@ module "keyvault_secret" {
 }
 ```
 
+Azure Resource Manager has no delete operation for secrets, so the module writes the secret with an
+AzAPI PUT action (`azapi_resource_action`) rather than managing it as a resource:
+
+- Removing the module, renaming the secret, setting `control_plane_enabled` back to `false` or
+  running `terraform destroy` only removes the secret from the state. It stays in the vault until it
+  is deleted through the data plane (for example `az keyvault secret delete`) or the vault is deleted.
+- Terraform does not track the secret after writing it. A change made outside Terraform to its value,
+  content type, dates or tags is neither detected nor reverted. Only the secret's URIs are read on
+  every plan, so the outputs follow a version created outside Terraform.
 - The value is sent in the AzAPI `sensitive_body`, a write-only argument, so it is kept out of the
-  state, and also out of the plan when it comes from the ephemeral `value_wo`.
-  Azure Resource Manager never returns it, so a refresh reads only the metadata and Terraform cannot
-  detect a value changed outside Terraform.
+  state, and also out of the plan when it comes from the ephemeral `value_wo`. Azure Resource Manager
+  never returns it.
 - The value is sent on creation, when `value_wo_version` changes, and with any change to the content
   type, dates or tags. A change of `value` or `value_wo` alone is not sent until `value_wo_version`
   changes. A `null` version counts as `0`.
-- Switching an existing secret between the two paths deletes it and creates it again, which fails
-  while the deleted secret is soft-deleted. Remove `azurerm_key_vault_secret.this[0]` from the state
-  and import `azapi_resource.this[0]` with the secret's ARM resource ID instead, as the root module's
-  README describes.
+- Switching an existing data plane secret to the control plane would first delete it through the
+  data plane. Remove `azurerm_key_vault_secret.this[0]` from the state before applying instead, as
+  the root module's README describes.
 
 <!-- markdownlint-disable MD033 -->
 ## Requirements
@@ -85,11 +93,12 @@ The following requirements are needed by this module:
 The following resources are used by this module:
 
 - [azapi_resource.telemetry](https://registry.terraform.io/providers/Azure/azapi/latest/docs/resources/resource) (resource)
-- [azapi_resource.this](https://registry.terraform.io/providers/Azure/azapi/latest/docs/resources/resource) (resource)
+- [azapi_resource_action.this](https://registry.terraform.io/providers/Azure/azapi/latest/docs/resources/resource_action) (resource)
 - [azurerm_key_vault_secret.this](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/key_vault_secret) (resource)
 - [azurerm_role_assignment.this](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/role_assignment) (resource)
 - [terraform_data.telemetry](https://registry.terraform.io/providers/hashicorp/terraform/latest/docs/resources/data) (resource)
 - [azapi_client_config.telemetry](https://registry.terraform.io/providers/Azure/azapi/latest/docs/data-sources/client_config) (data source)
+- [azapi_resource.this](https://registry.terraform.io/providers/Azure/azapi/latest/docs/data-sources/resource) (data source)
 
 <!-- markdownlint-disable MD013 -->
 ## Required Inputs
@@ -122,14 +131,16 @@ Default: `null`
 
 ### <a name="input_control_plane_enabled"></a> [control\_plane\_enabled](#input\_control\_plane\_enabled)
 
-Description: Whether to create the secret through Azure Resource Manager (`Microsoft.KeyVault/vaults/secrets`, managed with AzAPI) instead of the Key Vault data plane (`azurerm_key_vault_secret`). Defaults to `false`, which keeps the data plane behaviour of earlier versions.
+Description: Whether to create the secret through Azure Resource Manager (`Microsoft.KeyVault/vaults/secrets`, written with an AzAPI PUT action) instead of the Key Vault data plane (`azurerm_key_vault_secret`). Defaults to `false`, which keeps the data plane behaviour of earlier versions.
 
 With `true`:
 
-- The identity running Terraform needs `Microsoft.KeyVault/vaults/secrets/write` on the vault (for example Key Vault Contributor or Contributor) and no Key Vault data plane role. Requests go to Azure Resource Manager, so the vault firewall and private endpoints do not apply to them.
-- The value is sent through the write-only `sensitive_body`, so it is kept out of the state, and also out of the plan when it comes from the ephemeral `value_wo`. Azure Resource Manager never returns the value, so a refresh reads only the secret's metadata and Terraform cannot detect a value changed outside Terraform.
+- The identity running Terraform needs `Microsoft.KeyVault/vaults/secrets/write` and `Microsoft.KeyVault/vaults/secrets/read` on the vault (for example Key Vault Contributor or Contributor) and no Key Vault data plane role. It does not need network access to the vault: Azure Resource Manager writes the secret even when the vault firewall denies by default with `bypass = "None"`.
+- The value is sent through the write-only `sensitive_body`, so it is kept out of the state, and also out of the plan when it comes from the ephemeral `value_wo`. Azure Resource Manager never returns the value.
 - The value is sent when the secret is created, when `value_wo_version` changes, and when another property of the secret (content type, dates or tags) changes. A change of `value` or `value_wo` alone is not sent until `value_wo_version` changes; this applies to `value` as well as to `value_wo`.
-- Switching an existing secret between the two paths deletes it and creates it again, which fails while the deleted secret is soft-deleted. Move it in the state instead, as the root module's README describes.
+- Terraform does not track the secret after writing it. A change made outside Terraform to its value, content type, dates or tags is neither detected nor reverted. Only the secret's URIs are read on every plan, so the outputs follow a version created outside Terraform.
+- Azure Resource Manager cannot delete a secret. Removing the secret from the configuration, renaming it, setting this back to `false` or running `terraform destroy` only removes it from the state: the secret stays in the vault until it is deleted through the data plane (for example `az keyvault secret delete`) or the vault is deleted.
+- Switching an existing data plane secret to `true` would first delete it through the data plane. Remove it from the state instead, as the root module's README describes.
 
 Type: `bool`
 
@@ -152,22 +163,6 @@ Description: The expiration date of the secret as a UTC datetime (Y-m-d'T'H:M:S'
 Type: `string`
 
 Default: `null`
-
-### <a name="input_ignore_body_changes"></a> [ignore\_body\_changes](#input\_ignore\_body\_changes)
-
-Description: Paths in each AzAPI resource's `body` whose changes the AzAPI provider ignores. Paths use dot notation, for example `properties.contentType`. Configuration changes at an ignored path are **not** sent to Azure until the path is removed from the list. Changes take effect only after an apply, because the value is held in provider-private state.
-
-- `keyvault_vaults_secrets` - Ignored body paths for the secret when `control_plane_enabled` is `true`.
-
-Type:
-
-```hcl
-object({
-    keyvault_vaults_secrets = optional(list(string), [])
-  })
-```
-
-Default: `{}`
 
 ### <a name="input_location"></a> [location](#input\_location)
 

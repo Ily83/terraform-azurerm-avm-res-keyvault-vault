@@ -16,7 +16,7 @@ example, requires this versioned form and is told to follow rotation by a separa
 setting. Use `versionless_id` only where the consuming API documents that it accepts a
 versionless URI.
 DESCRIPTION
-  value       = var.control_plane_enabled ? azapi_resource.this[0].output.properties.keyUriWithVersion : azurerm_key_vault_key.this[0].id
+  value       = var.control_plane_enabled ? local.control_plane_output.key_uri_with_version : azurerm_key_vault_key.this[0].id
 }
 
 output "n" {
@@ -26,7 +26,7 @@ output "n" {
 
 output "name" {
   description = "The name of the Key Vault Key."
-  value       = var.control_plane_enabled ? azapi_resource.this[0].name : azurerm_key_vault_key.this[0].name
+  value       = var.control_plane_enabled ? basename(azapi_resource_action.this[0].resource_id) : azurerm_key_vault_key.this[0].name
 }
 
 output "public_key_openssh" {
@@ -52,7 +52,7 @@ The versioned Azure Resource Manager (ARM) resource ID of the key, in the form
 This is an ARM resource ID, not a data plane URI. Use `id` when a service asks for a
 key vault key URI or identifier such as `https://<vault-name>.vault.azure.net/keys/...`.
 DESCRIPTION
-  value       = var.control_plane_enabled ? "${azapi_resource.this[0].id}/versions/${basename(azapi_resource.this[0].output.properties.keyUriWithVersion)}" : azurerm_key_vault_key.this[0].resource_id
+  value       = var.control_plane_enabled ? "${local.resource_versionless_id}/versions/${basename(local.control_plane_output.key_uri_with_version)}" : azurerm_key_vault_key.this[0].resource_id
 }
 
 output "resource_versionless_id" {
@@ -74,7 +74,7 @@ The versionless data plane URI of the key, in the form
 Because it does not pin a key version, services that support it will pick up new key
 versions automatically. Use `id` when a service requires a specific key version.
 DESCRIPTION
-  value       = var.control_plane_enabled ? azapi_resource.this[0].output.properties.keyUri : azurerm_key_vault_key.this[0].versionless_id
+  value       = var.control_plane_enabled ? local.control_plane_output.key_uri : azurerm_key_vault_key.this[0].versionless_id
 }
 
 output "x" {

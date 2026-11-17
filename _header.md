@@ -4,14 +4,23 @@ Module to deploy key vaults, keys and secrets in Azure.
 
 ## Recovering a soft-deleted key vault
 
-A deleted key vault stays in the soft-deleted state for its retention period and keeps its name, so
-creating a vault with that name fails. With purge protection, the vault cannot be purged earlier. To
-bring the vault back with its keys, secrets and certificates:
+A deleted key vault stays in the soft-deleted state for its retention period and keeps its name. With
+purge protection, the vault cannot be purged earlier.
 
-1. Set `create_mode = "recover"` and apply. Azure restores the vault as it was and ignores the other
-   properties of that request.
+Applying the configuration again can already bring the vault back: Azure recovers a soft-deleted
+vault on a normal create request when the request carries the same network ACLs as the deleted vault.
+Otherwise the request fails with `409 ConflictError`, "A vault with the same name already exists in
+deleted state". `create_mode = "recover"` asks for the recovery explicitly, so it does not depend on
+that match. To bring the vault back with its keys, secrets and certificates:
+
+1. Set `create_mode = "recover"` and apply. Azure restores the vault as it was deleted and ignores
+   the other properties of the request.
 1. Set `create_mode` back to `null` and apply again. This brings the vault in line with the
    configuration and recreates its role assignments, which a recovery does not restore.
+
+Do not leave `create_mode = "recover"` set. While it is set, Azure keeps ignoring the other vault
+properties, so a difference between the recovered vault and the configuration shows up in every plan
+and no apply removes it.
 
 The `recover_soft_deleted_key_vaults` feature of the AzureRM provider has no effect on this module,
 which manages the key vault with AzAPI.
@@ -24,12 +33,10 @@ Vault Secrets Officer or Key Vault Crypto Officer), network access to the vault 
 refresh reads the secret back.
 
 Set `control_plane_enabled = true` on an entry of `secrets` or `keys` to create it through Azure
-Resource Manager instead (`Microsoft.KeyVault/vaults/secrets` and `Microsoft.KeyVault/vaults/keys`,
-managed with AzAPI). The identity then needs `Microsoft.KeyVault/vaults/secrets/write` or
-`Microsoft.KeyVault/vaults/keys/write`, which Key Vault Contributor and Contributor include, and no
-data plane role. The requests go to Azure Resource Manager, so the vault firewall and private
-endpoints do not apply to them. The setting is per entry and defaults to `false`, so existing
-configurations plan no change.
+Resource Manager instead (`Microsoft.KeyVault/vaults/secrets` and `Microsoft.KeyVault/vaults/keys`).
+The identity then needs the `write` and `read` actions of those resource types, which Key Vault
+Contributor and Contributor include, and no data plane role. The setting is per entry and defaults to
+`false`, so existing configurations plan no change.
 
 ```hcl
 secrets = {
@@ -42,55 +49,80 @@ secrets_value_wo         = { session = ephemeral.random_password.session.result 
 secrets_value_wo_version = { session = 1 }
 ```
 
-Trade-offs of the control plane path:
+Azure Resource Manager can create these objects but has no delete operation for them (a DELETE
+returns `405 DeleteNotSupported`). The module therefore writes each one with an AzAPI PUT action
+(`azapi_resource_action`) rather than managing it as a resource, and reads its URIs back for the
+outputs. This has consequences that differ from the data plane path:
 
+- **Nothing is deleted.** Removing a control plane secret or key from the configuration, renaming
+  it, setting `control_plane_enabled` back to `false` or running `terraform destroy` only removes it
+  from the state. The object stays in the vault until it is deleted through the data plane (for
+  example `az keyvault secret delete` or `az keyvault key delete`, which need a data plane role) or
+  the vault itself is deleted.
+- **No drift detection.** Terraform does not track the object after writing it. A change made
+  outside Terraform to a secret's value, content type, dates or tags, or to a key, is neither
+  detected nor reverted. Only the URIs are read on every plan, so the `id` and `versionless_id`
+  outputs follow a new secret version or a key rotation.
+- **Vault firewall.** Secrets need no network access to the vault: Azure Resource Manager writes
+  them even when the vault firewall denies by default with `bypass = "None"`. Keys are different:
+  Azure Resource Manager reaches the vault as a trusted Microsoft service to create and read a key.
+  When `network_acls.default_action` is `Deny`, set `network_acls.bypass = "AzureServices"`. With
+  `bypass = "None"`, which is this module's default, a control plane key fails with
+  `400 ForbiddenByFirewall`.
 - **Secret values are write-only.** The value is sent in the AzAPI `sensitive_body`, a write-only
   argument, so it is kept out of the state, and also out of the plan when it comes from
   `secrets_value_wo` (a value in `secrets_value` is still saved as an input variable in a plan file).
-  Azure Resource Manager never returns it. A refresh reads only the secret's metadata, so Terraform
-  cannot detect a value that was changed outside Terraform.
+  Azure Resource Manager never returns it.
 - **A new value needs a version bump.** The value is sent when the secret is created, when its
   `secrets_value_wo_version` entry changes, and with any change to the secret's content type, dates
   or tags. Changing only the value in `secrets_value` or `secrets_value_wo` is not sent until the
   version changes. A missing version counts as `0`.
 - **Keys are created once.** Azure Resource Manager only creates the first version of a key; a
   request for a key that already exists returns it without writing anything. A later change to the
-  key's options, size, curve, dates, rotation policy or tags is shown in every plan but is not
-  applied. Change the key through the data plane, or create a key with a new name. Azure rotates the
-  key according to its rotation policy as usual.
+  key's options, size, curve, dates, rotation policy or tags is sent but changes nothing in Azure,
+  and Terraform does not report the difference. Change the key through the data plane, or create a
+  key with a new name. Azure rotates the key according to its rotation policy as usual.
 - **Key limits.** `release_policy` is not supported, and the `e`, `n`, `x`, `y`, `public_key_pem`
   and `public_key_openssh` attributes of the `keys` output are `null`, because Azure Resource
   Manager does not return the public key.
 - **Role assignments on the secret or key** are still created with the AzureRM provider, scoped to
   the secret's or key's ARM resource ID.
 
-`resource_types.keyvault_vaults_secrets`, `resource_types.keyvault_vaults_keys` and the matching
-`ignore_body_changes` slots are passed to the submodules, together with `retry` and `timeouts`.
+`resource_types.keyvault_vaults_secrets` and `resource_types.keyvault_vaults_keys` are passed to the
+submodules, together with `retry` and `timeouts`. An action has no `ignore_body_changes` argument, so
+`ignore_body_changes` has no entry for these two types.
 
 ### Switching an existing secret or key
 
-Changing `control_plane_enabled` on an existing entry would delete the secret or key and create it
-again: the new create then fails while the deleted object is soft-deleted, and a deleted key's key
-material is lost. Move the object in the state instead, before applying. Apply this module version
-once without switching first, so that the `moved` blocks have put the existing secrets and keys at the
-`[0]` addresses used below. For a secret moving to the control plane:
+Setting `control_plane_enabled = true` on an entry that the module already manages through the data
+plane would first delete that secret or key through the data plane. The control plane request for the
+same name can then fail while the deleted object is soft-deleted, and a purged key's key material is
+lost. Remove the
+object from the state before applying, so that Terraform only forgets it. Apply this module version
+once without switching first, so that the `moved` blocks have put the existing secrets and keys at
+the `[0]` addresses used below:
 
 ```pwsh
 terraform state rm 'module.<module-name>.module.secrets["<key>"].azurerm_key_vault_secret.this[0]'
+terraform state rm 'module.<module-name>.module.keys["<key>"].azurerm_key_vault_key.this[0]'
 ```
+
+The next apply then writes the secret through Azure Resource Manager, as a new version with the
+configured value, and sends the create request for the key, which returns the existing key unchanged.
+
+To move back to the data plane, set `control_plane_enabled = false` and import the existing object,
+because Terraform only forgets the control plane entry and the AzureRM provider does not take over an
+object it did not create:
 
 ```hcl
 import {
-  to = module.<module-name>.module.secrets["<key>"].azapi_resource.this[0]
-  id = "/subscriptions/<subscription-id>/resourceGroups/<resource-group-name>/providers/Microsoft.KeyVault/vaults/<vault-name>/secrets/<secret-name>?api-version=2026-02-01"
+  to = module.<module-name>.module.secrets["<key>"].azurerm_key_vault_secret.this[0]
+  id = "https://<vault-name>.vault.azure.net/secrets/<secret-name>/<secret-version>"
 }
 ```
 
-The first apply after the import writes the value again, as a new version of the secret. For a key,
-use `module.keys["<key>"].azurerm_key_vault_key.this[0]`, `module.keys["<key>"].azapi_resource.this[0]`
-and `/keys/<key-name>` in the ID; the key itself is not changed. To move back to the data plane, remove
-the `azapi_resource.this[0]` address from the state and import `azurerm_key_vault_secret.this[0]` or
-`azurerm_key_vault_key.this[0]` with the versioned data plane URI of the secret or key as the ID.
+For a key, import `module.keys["<key>"].azurerm_key_vault_key.this[0]` with
+`https://<vault-name>.vault.azure.net/keys/<key-name>/<key-version>`.
 
 ## Upgrading from a version that used the AzureRM provider for the key vault
 

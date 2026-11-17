@@ -30,14 +30,16 @@ variable "control_plane_enabled" {
   type        = bool
   default     = false
   description = <<DESCRIPTION
-Whether to create the secret through Azure Resource Manager (`Microsoft.KeyVault/vaults/secrets`, managed with AzAPI) instead of the Key Vault data plane (`azurerm_key_vault_secret`). Defaults to `false`, which keeps the data plane behaviour of earlier versions.
+Whether to create the secret through Azure Resource Manager (`Microsoft.KeyVault/vaults/secrets`, written with an AzAPI PUT action) instead of the Key Vault data plane (`azurerm_key_vault_secret`). Defaults to `false`, which keeps the data plane behaviour of earlier versions.
 
 With `true`:
 
-- The identity running Terraform needs `Microsoft.KeyVault/vaults/secrets/write` on the vault (for example Key Vault Contributor or Contributor) and no Key Vault data plane role. Requests go to Azure Resource Manager, so the vault firewall and private endpoints do not apply to them.
-- The value is sent through the write-only `sensitive_body`, so it is kept out of the state, and also out of the plan when it comes from the ephemeral `value_wo`. Azure Resource Manager never returns the value, so a refresh reads only the secret's metadata and Terraform cannot detect a value changed outside Terraform.
+- The identity running Terraform needs `Microsoft.KeyVault/vaults/secrets/write` and `Microsoft.KeyVault/vaults/secrets/read` on the vault (for example Key Vault Contributor or Contributor) and no Key Vault data plane role. It does not need network access to the vault: Azure Resource Manager writes the secret even when the vault firewall denies by default with `bypass = "None"`.
+- The value is sent through the write-only `sensitive_body`, so it is kept out of the state, and also out of the plan when it comes from the ephemeral `value_wo`. Azure Resource Manager never returns the value.
 - The value is sent when the secret is created, when `value_wo_version` changes, and when another property of the secret (content type, dates or tags) changes. A change of `value` or `value_wo` alone is not sent until `value_wo_version` changes; this applies to `value` as well as to `value_wo`.
-- Switching an existing secret between the two paths deletes it and creates it again, which fails while the deleted secret is soft-deleted. Move it in the state instead, as the root module's README describes.
+- Terraform does not track the secret after writing it. A change made outside Terraform to its value, content type, dates or tags is neither detected nor reverted. Only the secret's URIs are read on every plan, so the outputs follow a version created outside Terraform.
+- Azure Resource Manager cannot delete a secret. Removing the secret from the configuration, renaming it, setting this back to `false` or running `terraform destroy` only removes it from the state: the secret stays in the vault until it is deleted through the data plane (for example `az keyvault secret delete`) or the vault is deleted.
+- Switching an existing data plane secret to `true` would first delete it through the data plane. Remove it from the state instead, as the root module's README describes.
 DESCRIPTION
   nullable    = false
 }
@@ -62,19 +64,6 @@ variable "expiration_date" {
     error_message = "Value must be a UTC datetime (Y-m-d'T'H:M:S'Z')."
     condition     = var.expiration_date == null || can(regex("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$", var.expiration_date))
   }
-}
-
-variable "ignore_body_changes" {
-  type = object({
-    keyvault_vaults_secrets = optional(list(string), [])
-  })
-  default     = {}
-  description = <<DESCRIPTION
-Paths in each AzAPI resource's `body` whose changes the AzAPI provider ignores. Paths use dot notation, for example `properties.contentType`. Configuration changes at an ignored path are **not** sent to Azure until the path is removed from the list. Changes take effect only after an apply, because the value is held in provider-private state.
-
-- `keyvault_vaults_secrets` - Ignored body paths for the secret when `control_plane_enabled` is `true`.
-DESCRIPTION
-  nullable    = false
 }
 
 variable "location" {

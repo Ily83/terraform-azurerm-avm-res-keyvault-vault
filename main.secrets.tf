@@ -8,7 +8,6 @@ module "secrets" {
   control_plane_enabled = each.value.control_plane_enabled
   enable_telemetry      = var.enable_telemetry
   expiration_date       = each.value.expiration_date
-  ignore_body_changes   = var.ignore_body_changes.keyvault_vaults_secrets
   location              = var.location
   not_before_date       = each.value.not_before_date
   resource_types        = var.resource_types.keyvault_vaults_secrets

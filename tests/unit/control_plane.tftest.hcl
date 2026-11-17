@@ -30,7 +30,7 @@ run "secret_default_uses_data_plane" {
   }
 
   assert {
-    condition     = length(azurerm_key_vault_secret.this) == 1 && length(azapi_resource.this) == 0
+    condition     = length(azurerm_key_vault_secret.this) == 1 && length(azapi_resource_action.this) == 0 && length(data.azapi_resource.this) == 0
     error_message = "Without control_plane_enabled the secret must stay on the data plane resource only."
   }
 }
@@ -55,44 +55,48 @@ run "secret_control_plane_body" {
   }
 
   assert {
-    condition     = length(azurerm_key_vault_secret.this) == 0 && length(azapi_resource.this) == 1
-    error_message = "With control_plane_enabled the secret must be an AzAPI resource only."
+    condition     = length(azurerm_key_vault_secret.this) == 0 && length(azapi_resource_action.this) == 1
+    error_message = "With control_plane_enabled the secret must be an AzAPI action only."
   }
   assert {
-    condition     = azapi_resource.this[0].type == "Microsoft.KeyVault/vaults/secrets@2026-02-01"
+    condition     = azapi_resource_action.this[0].type == "Microsoft.KeyVault/vaults/secrets@2026-02-01"
     error_message = "The secret must use the default resource type."
   }
   assert {
-    condition     = azapi_resource.this[0].parent_id == var.key_vault_resource_id && azapi_resource.this[0].name == "cp"
-    error_message = "The secret must be created under the key vault with its name."
+    condition     = azapi_resource_action.this[0].resource_id == "${var.key_vault_resource_id}/secrets/cp"
+    error_message = "The secret must be written under the key vault with its name."
   }
   assert {
-    condition     = azapi_resource.this[0].body.properties.contentType == "text/plain"
+    condition     = azapi_resource_action.this[0].method == "PUT" && azapi_resource_action.this[0].when == "apply"
+    error_message = "The secret must be written with a PUT on apply, so that destroying it sends no request: Azure Resource Manager has no DELETE for secrets."
+  }
+  assert {
+    condition     = data.azapi_resource.this[0].ignore_not_found == true
+    error_message = "A secret deleted outside Terraform must not fail the read."
+  }
+  assert {
+    condition     = azapi_resource_action.this[0].body.properties.contentType == "text/plain"
     error_message = "content_type must map to properties.contentType."
   }
   assert {
-    condition     = azapi_resource.this[0].body.properties.attributes.exp == 1767225600 && azapi_resource.this[0].body.properties.attributes.nbf == 951827696
+    condition     = azapi_resource_action.this[0].body.properties.attributes.exp == 1767225600 && azapi_resource_action.this[0].body.properties.attributes.nbf == 951827696
     error_message = "The dates must be sent as seconds since 1970-01-01T00:00:00Z."
   }
   assert {
-    condition     = azapi_resource.this[0].body.properties.attributes.enabled == true
+    condition     = azapi_resource_action.this[0].body.properties.attributes.enabled == true
     error_message = "The secret must be created enabled."
   }
   assert {
-    condition     = !can(azapi_resource.this[0].body.properties.value)
+    condition     = !can(azapi_resource_action.this[0].body.properties.value)
     error_message = "The value must never be part of body; it belongs in sensitive_body."
   }
   assert {
-    condition     = startswith(azapi_resource.this[0].sensitive_body_version["properties.value"], "3-")
+    condition     = startswith(azapi_resource_action.this[0].sensitive_body_version["properties.value"], "3-")
     error_message = "sensitive_body_version must start with value_wo_version."
   }
   assert {
-    condition     = azapi_resource.this[0].tags["env"] == "test"
-    error_message = "Tags must be set on the secret."
-  }
-  assert {
-    condition     = azapi_resource.this[0].ignore_null_property == true
-    error_message = "Unset properties must not be sent."
+    condition     = azapi_resource_action.this[0].body.tags["env"] == "test"
+    error_message = "Tags must be sent in the body of the secret."
   }
 }
 
@@ -111,12 +115,12 @@ run "secret_control_plane_plain_value_without_version" {
   }
 
   assert {
-    condition     = startswith(azapi_resource.this[0].sensitive_body_version["properties.value"], "0-")
+    condition     = startswith(azapi_resource_action.this[0].sensitive_body_version["properties.value"], "0-")
     error_message = "A missing value_wo_version must count as 0."
   }
   assert {
-    condition     = lookup(azapi_resource.this[0].body.properties.attributes, "exp", null) == null && lookup(azapi_resource.this[0].body.properties, "contentType", null) == null
-    error_message = "Unset dates and content type must be null so that they are not sent."
+    condition     = jsonencode(azapi_resource_action.this[0].body) == jsonencode({ properties = { attributes = { enabled = true } } })
+    error_message = "Unset dates, content type and tags must be left out of the body, not sent as null."
   }
 }
 
@@ -135,9 +139,6 @@ run "secret_control_plane_resource_type_override" {
     resource_types = {
       keyvault_vaults_secrets = "Microsoft.KeyVault/vaults/secrets@2023-07-01"
     }
-    ignore_body_changes = {
-      keyvault_vaults_secrets = ["properties.contentType"]
-    }
     retry = {
       error_message_regex = ["Conflict"]
     }
@@ -147,16 +148,20 @@ run "secret_control_plane_resource_type_override" {
   }
 
   assert {
-    condition     = azapi_resource.this[0].type == "Microsoft.KeyVault/vaults/secrets@2023-07-01"
+    condition     = azapi_resource_action.this[0].type == "Microsoft.KeyVault/vaults/secrets@2023-07-01"
     error_message = "resource_types must override the secret type."
   }
   assert {
-    condition     = azapi_resource.this[0].retry.error_message_regex[0] == "Conflict"
+    condition     = azapi_resource_action.this[0].retry.error_message_regex[0] == "Conflict"
     error_message = "retry must reach the secret."
   }
   assert {
-    condition     = azapi_resource.this[0].timeouts.create == "10m"
+    condition     = azapi_resource_action.this[0].timeouts.create == "10m"
     error_message = "timeouts must reach the secret."
+  }
+  assert {
+    condition     = data.azapi_resource.this[0].type == "Microsoft.KeyVault/vaults/secrets@2023-07-01"
+    error_message = "resource_types must also override the type the secret is read with."
   }
 }
 
@@ -173,7 +178,7 @@ run "secret_control_plane_requires_value" {
     control_plane_enabled = true
   }
 
-  expect_failures = [azapi_resource.this]
+  expect_failures = [azapi_resource_action.this]
 }
 
 run "secret_control_plane_outputs" {
@@ -191,10 +196,22 @@ run "secret_control_plane_outputs" {
     value_wo_version      = 1
   }
 
+  # The write returned one version; the read finds a newer one, created outside Terraform.
   override_resource {
-    target = azapi_resource.this[0]
+    target = azapi_resource_action.this[0]
     values = {
-      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/test/providers/Microsoft.KeyVault/vaults/test/secrets/cp"
+      output = {
+        properties = {
+          secretUri            = "https://test.vault.azure.net/secrets/cp"
+          secretUriWithVersion = "https://test.vault.azure.net/secrets/cp/00000000000000000000000000000001"
+        }
+      }
+    }
+  }
+  override_data {
+    target = data.azapi_resource.this[0]
+    values = {
+      exists = true
       output = {
         properties = {
           secretUri            = "https://test.vault.azure.net/secrets/cp"
@@ -206,7 +223,7 @@ run "secret_control_plane_outputs" {
 
   assert {
     condition     = output.id == "https://test.vault.azure.net/secrets/cp/0123456789abcdef"
-    error_message = "id must be the versioned secret URI."
+    error_message = "id must be the versioned secret URI that the read returns."
   }
   assert {
     condition     = output.versionless_id == "https://test.vault.azure.net/secrets/cp"
@@ -223,6 +240,47 @@ run "secret_control_plane_outputs" {
   assert {
     condition     = output.name == "cp"
     error_message = "name must be the secret name."
+  }
+}
+
+run "secret_control_plane_outputs_when_secret_is_gone" {
+  command = apply
+
+  module {
+    source = "./modules/secret"
+  }
+
+  variables {
+    key_vault_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/test/providers/Microsoft.KeyVault/vaults/test"
+    name                  = "cp"
+    control_plane_enabled = true
+    value_wo              = "secret-value-wo"
+    value_wo_version      = 1
+  }
+
+  override_resource {
+    target = azapi_resource_action.this[0]
+    values = {
+      output = {
+        properties = {
+          secretUri            = "https://test.vault.azure.net/secrets/cp"
+          secretUriWithVersion = "https://test.vault.azure.net/secrets/cp/00000000000000000000000000000001"
+        }
+      }
+    }
+  }
+  # What the read returns for a secret that was deleted outside Terraform.
+  override_data {
+    target = data.azapi_resource.this[0]
+    values = {
+      exists = false
+      output = null
+    }
+  }
+
+  assert {
+    condition     = output.id == "https://test.vault.azure.net/secrets/cp/00000000000000000000000000000001" && output.versionless_id == "https://test.vault.azure.net/secrets/cp"
+    error_message = "The outputs must fall back to the URIs of the last write when the secret cannot be read."
   }
 }
 
@@ -243,7 +301,7 @@ run "key_default_uses_data_plane" {
   }
 
   assert {
-    condition     = length(azurerm_key_vault_key.this) == 1 && length(azapi_resource.this) == 0
+    condition     = length(azurerm_key_vault_key.this) == 1 && length(azapi_resource_action.this) == 0 && length(data.azapi_resource.this) == 0
     error_message = "Without control_plane_enabled the key must stay on the data plane resource only."
   }
 }
@@ -274,46 +332,54 @@ run "key_control_plane_body" {
   }
 
   assert {
-    condition     = length(azurerm_key_vault_key.this) == 0 && length(azapi_resource.this) == 1
-    error_message = "With control_plane_enabled the key must be an AzAPI resource only."
+    condition     = length(azurerm_key_vault_key.this) == 0 && length(azapi_resource_action.this) == 1
+    error_message = "With control_plane_enabled the key must be an AzAPI action only."
   }
   assert {
-    condition     = azapi_resource.this[0].type == "Microsoft.KeyVault/vaults/keys@2026-02-01"
+    condition     = azapi_resource_action.this[0].type == "Microsoft.KeyVault/vaults/keys@2026-02-01"
     error_message = "The key must use the default resource type."
   }
   assert {
-    condition     = azapi_resource.this[0].body.properties.kty == "RSA" && azapi_resource.this[0].body.properties.keySize == 2048
+    condition     = azapi_resource_action.this[0].body.properties.kty == "RSA" && azapi_resource_action.this[0].body.properties.keySize == 2048
     error_message = "type and size must map to kty and keySize."
   }
   assert {
-    condition     = jsonencode(azapi_resource.this[0].body.properties.keyOps) == jsonencode(["sign", "verify"])
+    condition     = jsonencode(azapi_resource_action.this[0].body.properties.keyOps) == jsonencode(["sign", "verify"])
     error_message = "opts must map to keyOps."
   }
   assert {
-    condition     = azapi_resource.this[0].body.properties.attributes.exp == 1767225600
+    condition     = azapi_resource_action.this[0].body.properties.attributes.exp == 1767225600
     error_message = "expiration_date must be sent as seconds since 1970-01-01T00:00:00Z."
   }
   assert {
-    condition     = azapi_resource.this[0].body.properties.rotationPolicy.attributes.expiryTime == "P365D"
+    condition     = azapi_resource_action.this[0].body.properties.rotationPolicy.attributes.expiryTime == "P365D"
     error_message = "expire_after must map to rotationPolicy.attributes.expiryTime."
   }
   assert {
     condition = (
-      length(azapi_resource.this[0].body.properties.rotationPolicy.lifetimeActions) == 2 &&
-      azapi_resource.this[0].body.properties.rotationPolicy.lifetimeActions[0].action.type == "rotate" &&
-      azapi_resource.this[0].body.properties.rotationPolicy.lifetimeActions[0].trigger.timeAfterCreate == "P180D" &&
-      azapi_resource.this[0].body.properties.rotationPolicy.lifetimeActions[1].action.type == "notify" &&
-      azapi_resource.this[0].body.properties.rotationPolicy.lifetimeActions[1].trigger.timeBeforeExpiry == "P30D"
+      length(azapi_resource_action.this[0].body.properties.rotationPolicy.lifetimeActions) == 2 &&
+      azapi_resource_action.this[0].body.properties.rotationPolicy.lifetimeActions[0].action.type == "rotate" &&
+      azapi_resource_action.this[0].body.properties.rotationPolicy.lifetimeActions[0].trigger.timeAfterCreate == "P180D" &&
+      azapi_resource_action.this[0].body.properties.rotationPolicy.lifetimeActions[1].action.type == "notify" &&
+      azapi_resource_action.this[0].body.properties.rotationPolicy.lifetimeActions[1].trigger.timeBeforeExpiry == "P30D"
     )
     error_message = "The rotation policy must become a rotate and a notify lifetime action."
   }
   assert {
-    condition     = azapi_resource.this[0].ignore_casing == true
-    error_message = "Azure returns the action types capitalised, so casing must be ignored."
+    condition     = !can(azapi_resource_action.this[0].body.properties.rotationPolicy.lifetimeActions[0].trigger.timeBeforeExpiry) && !can(azapi_resource_action.this[0].body.properties.curveName)
+    error_message = "Unset properties must be left out of the body, not sent as null."
   }
   assert {
-    condition     = azapi_resource.this[0].tags["env"] == "test"
-    error_message = "Tags must be set on the key."
+    condition     = azapi_resource_action.this[0].resource_id == "${var.key_vault_resource_id}/keys/cp"
+    error_message = "The key must be created under the key vault with its name."
+  }
+  assert {
+    condition     = azapi_resource_action.this[0].method == "PUT" && azapi_resource_action.this[0].when == "apply"
+    error_message = "The key must be created with a PUT on apply, so that destroying it sends no request: Azure Resource Manager has no DELETE for keys."
+  }
+  assert {
+    condition     = azapi_resource_action.this[0].body.tags["env"] == "test"
+    error_message = "Tags must be sent in the body of the key."
   }
 }
 
@@ -333,8 +399,51 @@ run "key_control_plane_without_rotation_policy" {
   }
 
   assert {
-    condition     = azapi_resource.this[0].body.properties.curveName == "P-384" && azapi_resource.this[0].body.properties.rotationPolicy == null
-    error_message = "curve must map to curveName, and no rotation policy must be sent when none is set."
+    condition     = jsonencode(azapi_resource_action.this[0].body) == jsonencode({ properties = { attributes = { enabled = true }, curveName = "P-384", keyOps = [], kty = "EC" } })
+    error_message = "curve must map to curveName, and unset properties such as the size, the rotation policy and the tags must be left out."
+  }
+}
+
+run "key_control_plane_rotation_before_expiry" {
+  command = plan
+
+  module {
+    source = "./modules/key"
+  }
+
+  variables {
+    key_vault_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/test/providers/Microsoft.KeyVault/vaults/test"
+    name                  = "cp"
+    type                  = "RSA"
+    size                  = 2048
+    opts                  = ["sign", "verify"]
+    control_plane_enabled = true
+    rotation_policy = {
+      automatic = {
+        time_before_expiry = "P30D"
+      }
+      expire_after         = "P90D"
+      notify_before_expiry = "P29D"
+    }
+  }
+
+  assert {
+    condition = jsonencode(azapi_resource_action.this[0].body) == jsonencode({
+      properties = {
+        attributes = { enabled = true }
+        keyOps     = ["sign", "verify"]
+        keySize    = 2048
+        kty        = "RSA"
+        rotationPolicy = {
+          attributes = { expiryTime = "P90D" }
+          lifetimeActions = [
+            { action = { type = "rotate" }, trigger = { timeBeforeExpiry = "P30D" } },
+            { action = { type = "notify" }, trigger = { timeBeforeExpiry = "P29D" } },
+          ]
+        }
+      }
+    })
+    error_message = "The request body must contain exactly the configured key properties."
   }
 }
 
@@ -374,10 +483,22 @@ run "key_control_plane_outputs" {
     control_plane_enabled = true
   }
 
+  # The create request returned the first version; the read finds the version after a rotation.
   override_resource {
-    target = azapi_resource.this[0]
+    target = azapi_resource_action.this[0]
     values = {
-      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/test/providers/Microsoft.KeyVault/vaults/test/keys/cp"
+      output = {
+        properties = {
+          keyUri            = "https://test.vault.azure.net/keys/cp"
+          keyUriWithVersion = "https://test.vault.azure.net/keys/cp/00000000000000000000000000000001"
+        }
+      }
+    }
+  }
+  override_data {
+    target = data.azapi_resource.this[0]
+    values = {
+      exists = true
       output = {
         properties = {
           keyUri            = "https://test.vault.azure.net/keys/cp"
@@ -389,7 +510,7 @@ run "key_control_plane_outputs" {
 
   assert {
     condition     = output.id == "https://test.vault.azure.net/keys/cp/0123456789abcdef" && output.versionless_id == "https://test.vault.azure.net/keys/cp"
-    error_message = "id and versionless_id must be the key URIs."
+    error_message = "id and versionless_id must be the key URIs that the read returns."
   }
   assert {
     condition     = output.resource_id == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/test/providers/Microsoft.KeyVault/vaults/test/keys/cp/versions/0123456789abcdef"
@@ -458,10 +579,10 @@ run "root_mixes_both_paths" {
       }
     }
   }
-  override_resource {
-    target = module.secrets["cp"].azapi_resource.this[0]
+  override_data {
+    target = module.secrets["cp"].data.azapi_resource.this[0]
     values = {
-      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/test/providers/Microsoft.KeyVault/vaults/test/secrets/cp-secret"
+      exists = true
       output = {
         properties = {
           secretUri            = "https://test.vault.azure.net/secrets/cp-secret"
@@ -470,10 +591,10 @@ run "root_mixes_both_paths" {
       }
     }
   }
-  override_resource {
-    target = module.keys["cp"].azapi_resource.this[0]
+  override_data {
+    target = module.keys["cp"].data.azapi_resource.this[0]
     values = {
-      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/test/providers/Microsoft.KeyVault/vaults/test/keys/cp-key"
+      exists = true
       output = {
         properties = {
           keyUri            = "https://test.vault.azure.net/keys/cp-key"
@@ -485,11 +606,15 @@ run "root_mixes_both_paths" {
 
   assert {
     condition     = output.secrets_resource_ids["cp"].id == "https://test.vault.azure.net/secrets/cp-secret/1"
-    error_message = "The control plane secret must be reported from the AzAPI resource."
+    error_message = "The control plane secret must be reported from the read of the secret."
   }
   assert {
     condition     = output.keys_resource_ids["cp"].versionless_id == "https://test.vault.azure.net/keys/cp-key"
-    error_message = "The control plane key must be reported from the AzAPI resource."
+    error_message = "The control plane key must be reported from the read of the key."
+  }
+  assert {
+    condition     = output.secrets_resource_ids["cp"].resource_versionless_id == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/test/providers/Microsoft.KeyVault/vaults/test/secrets/cp-secret" && output.keys_resource_ids["cp"].name == "cp-key"
+    error_message = "The control plane items must report their ARM resource ID and name."
   }
   assert {
     condition     = output.secrets_resource_ids["plain"].name == "plain-secret" && output.keys_resource_ids["plain"].name == "plain-key"
